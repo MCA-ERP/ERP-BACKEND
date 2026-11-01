@@ -1,0 +1,35 @@
+{
+  "name": "education-erp-backend",
+  "version": "1.0.0",
+  "description": "API-First Modular Backend & Database for Education ERP",
+  "main": "src/server.ts",
+  "scripts": {
+    "dev": "tsc && node dist/src/server.js",
+    "build": "tsc",
+    "start": "node dist/src/server.js",
+    "migrate": "node db/run-migration.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.1",
+    "@types/pg": "^8.23.1",
+    "bcryptjs": "^3.0.2",
+    "cors": "^2.8.5",
+    "cross-fetch": "^4.1.0",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.23.1",
+    "ws": "^8.22.0",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/jsonwebtoken": "^9.0.9",
+    "@types/node": "^20.17.24",
+    "@types/ws": "^8.18.2",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}
