@@ -15,7 +15,9 @@ import { authRouter } from "./modules/auth/auth.routes";
 import { institutionRouter } from "./modules/institution/institution.routes";
 import { sisRouter } from "./modules/sis/sis.routes";
 import { academicsRouter } from "./modules/academics/academics.routes";
+import { adminRouter } from "./modules/admin/admin.routes";
 import { auditLogger } from "./middleware/auditLogger";
+import { HttpError } from "./lib/http-error";
 
 dotenv.config();
 
@@ -65,6 +67,7 @@ app.use("/api/v1/auth", authRouter);
 app.use("/api/v1/institution", institutionRouter);
 app.use("/api/v1/sis", sisRouter);
 app.use("/api/v1/academics", academicsRouter);
+app.use("/api/v1/admin", adminRouter);
 
 // Root Welcome Endpoint
 app.get("/", (_req: Request, res: Response) => {
@@ -85,10 +88,14 @@ app.use((req: Request, res: Response) => {
 
 // Global Error Handler
 app.use((err: Error, _req: Request, res: Response, _next: express.NextFunction) => {
+  if (err instanceof HttpError) {
+    res.status(err.status).json({ error: err.message });
+    return;
+  }
   console.error("Unhandled API Error:", err.stack);
   res.status(500).json({
     error: "Internal Server Error",
-    message: err.message,
+    ...(process.env.NODE_ENV === "production" ? {} : { message: err.message }),
   });
 });
 

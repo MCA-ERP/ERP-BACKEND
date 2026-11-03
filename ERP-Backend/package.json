@@ -7,7 +7,10 @@
     "dev": "tsc && node dist/src/server.js",
     "build": "tsc",
     "start": "node dist/src/server.js",
-    "migrate": "node db/run-migration.js"
+    "migrate": "node db/migrate.js",
+    "migrate:status": "node db/migrate.js status",
+    "migrate:dry": "node db/migrate.js --dry-run",
+    "seed:dev": "node db/migrate.js seed dev"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",
@@ -20,7 +23,7 @@
     "jsonwebtoken": "^9.0.2",
     "pg": "^8.23.1",
     "ws": "^8.22.0",
-    "zod": "^3.24.2"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",

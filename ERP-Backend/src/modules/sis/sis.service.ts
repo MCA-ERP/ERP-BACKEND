@@ -1,28 +1,26 @@
 import { supabaseAdmin } from "../../../db/client";
+import { HttpError } from "../../lib/http-error";
+import { safeSearch } from "../../lib/query";
+import { loadSchoolAccess } from "../../lib/entitlements";
 
 // ─────────────────────────────────────────────
 //  Types
 // ─────────────────────────────────────────────
-export interface EnrollStudentPayload {
+export interface EnrollStudentInput {
   first_name: string;
   last_name: string;
-  email?: string;
-  phone?: string;
   gender?: string;
   date_of_birth?: string;
-  grade?: string;
-  program?: string;
+  grade: string;
   section?: string;
   roll_no?: string;
-  school_name?: string;
-  school_code?: string;
   guardian_name?: string;
   guardian_phone?: string;
   guardian_relation?: string;
   address?: string;
-  registration_no?: string;
 }
 
+/** Shape consumed by the current dashboard UI. */
 export interface StudentRecord {
   id: string;
   registration_no: string;
@@ -48,253 +46,287 @@ export interface StudentRecord {
   created_at: string;
 }
 
-// ─────────────────────────────────────────────
-//  Service Methods
-// ─────────────────────────────────────────────
+const STUDENT_SELECT = `
+  id, registration_no, roll_no, first_name, last_name, gender, date_of_birth, status, created_at,
+  institutions:institution_id(name, code),
+  student_enrollments(roll_no, enrolled_on, grades:grade_id(name, sort_order), sections:section_id(name)),
+  student_guardians(relation, is_primary_contact, guardians:guardian_id(full_name, phone))`;
 
-/**
- * Fetch SIS dashboard overview stats.
- */
-export async function getSisStats() {
-  const [{ count: studentCount }, { count: deptCount }, { count: programCount }] =
-    await Promise.all([
-      supabaseAdmin.from("students").select("*", { count: "exact", head: true }),
-      supabaseAdmin.from("departments").select("*", { count: "exact", head: true }),
-      supabaseAdmin.from("programs").select("*", { count: "exact", head: true }),
-    ]);
-
-  return {
-    totalStudents: studentCount ?? 1250,
-    totalFaculty: 84,
-    totalDepartments: deptCount ?? 6,
-    totalPrograms: programCount ?? 12,
-    activeBatches: 18,
-    attendanceRate: "94.8%",
-  };
-}
-
-// In-memory active registry for enrolled students across sessions (syncs with DB)
-const enrolledStudentsRegistry: StudentRecord[] = [];
-
-/**
- * List / search students role-based.
- * Principals only see students belonging to their school_code.
- * SuperAdmins can see all students across the entire institution network.
- */
-export async function listStudents(search?: string, status?: string, limit = 50, offset = 0, school_code?: string) {
-  const targetCode = school_code ? school_code.toUpperCase().trim() : undefined;
-
-  let combinedList: StudentRecord[] = [...enrolledStudentsRegistry];
-
-  try {
-    let query = supabaseAdmin
-      .from("students")
-      .select(
-        `id, registration_no, roll_no, current_semester, status, admission_date,
-         user_profiles(first_name, last_name, email, phone),
-         batches(name, programs(name, code, departments(name, code)))`,
-        { count: "exact" }
-      )
-      .range(offset, offset + limit - 1)
-      .order("created_at", { ascending: false });
-
-    if (status) query = query.eq("status", status);
-    if (search) query = query.or(`registration_no.ilike.%${search}%,roll_no.ilike.%${search}%`);
-    if (targetCode) query = query.ilike("registration_no", `${targetCode}%`);
-
-    const { data: dbStudents } = await query;
-
-    if (dbStudents && Array.isArray(dbStudents) && dbStudents.length > 0) {
-      dbStudents.forEach((s: any) => {
-        const up = s.user_profiles || {};
-        const batch = s.batches || {};
-        const prog = batch.programs || {};
-        const dept = prog.departments || {};
-        const fullName = [up.first_name, up.last_name].filter(Boolean).join(" ") || "Enrolled Student";
-        const regNo = s.registration_no || `ST-${s.id}`;
-        const derivedCode = regNo.length >= 3 ? regNo.substring(0, 3).toUpperCase() : (targetCode || "RAV");
-
-        const mapped: StudentRecord = {
-          id: s.id,
-          registration_no: regNo,
-          student_id: regNo,
-          roll_no: s.roll_no || `R-${s.id.substring(0, 4)}`,
-          name: fullName,
-          first_name: up.first_name || "",
-          last_name: up.last_name || "",
-          email: up.email || `${regNo.toLowerCase()}@campus.edu`,
-          phone: up.phone || "",
-          gender: "Not Specified",
-          date_of_birth: "",
-          program: prog.name || `Class ${s.current_semester || 10} (Section A)`,
-          department: dept.name || "High School Division",
-          semester: s.current_semester || 10,
-          status: s.status || "Enrolled",
-          cgpa: "8.85",
-          attendance: "95%",
-          guardian: { name: "", phone: "", relation: "Parent" },
-          address: "",
-          school_name: derivedCode === "RAV" ? "Ravindra English Medium High School" : `Campus ${derivedCode}`,
-          school_code: derivedCode,
-          created_at: s.admission_date || new Date().toISOString(),
-        };
-
-        const existingIdx = combinedList.findIndex((item) => item.registration_no === mapped.registration_no);
-        if (existingIdx >= 0) {
-          combinedList[existingIdx] = mapped;
-        } else {
-          combinedList.unshift(mapped);
-        }
-      });
-    }
-  } catch {
-    // Continue with in-memory registry
-  }
-
-  // Filter by school code if provided (Principal view)
-  let result = combinedList;
-  if (targetCode) {
-    result = result.filter(
-      (s) =>
-        s.school_code?.toUpperCase() === targetCode ||
-        s.registration_no?.toUpperCase().startsWith(targetCode)
-    );
-  }
-
-  // Filter by status if provided
-  if (status) {
-    result = result.filter((s) => s.status.toLowerCase() === status.toLowerCase());
-  }
-
-  // Filter by search term if provided
-  if (search) {
-    const q = search.toLowerCase().trim();
-    result = result.filter(
-      (s) =>
-        s.name.toLowerCase().includes(q) ||
-        s.registration_no.toLowerCase().includes(q) ||
-        s.roll_no.toLowerCase().includes(q) ||
-        s.email.toLowerCase().includes(q)
-    );
-  }
+function toRecord(s: any): StudentRecord {
+  const enrollments: any[] = [...(s.student_enrollments ?? [])].sort((a, b) =>
+    String(b.enrolled_on).localeCompare(String(a.enrolled_on))
+  );
+  const current = enrollments[0];
+  const links: any[] = s.student_guardians ?? [];
+  const link = links.find((l) => l.is_primary_contact) ?? links[0];
 
   return {
-    students: result,
-    total: result.length,
-  };
-}
-
-/**
- * Enroll a new student.
- * Generates Student ID:  [SchoolPrefix]ST[seq]  e.g. RAVST005
- * Stores in Supabase database and persists into active session registry.
- */
-export async function enrollStudent(payload: EnrollStudentPayload): Promise<StudentRecord> {
-  const {
-    first_name,
-    last_name,
-    email,
-    phone,
-    gender,
-    date_of_birth,
-    grade,
-    program,
-    section,
-    roll_no,
-    school_name = "Ravindra English Medium High School",
-    school_code = "RAV",
-    guardian_name,
-    guardian_phone,
-    guardian_relation,
-    address,
-    registration_no,
-  } = payload;
-
-  // ── ID Generation Formula: [SchoolPrefix]ST[001...] ─────────────
-  const schoolPrefix = (school_code || school_name.replace(/[^a-zA-Z]/g, "").substring(0, 3) || "RAV").toUpperCase();
-  const roleCode = "ST";
-
-  // Calculate sequential count for this specific school
-  const schoolCount = enrolledStudentsRegistry.filter(
-    (s) => s.school_code?.toUpperCase() === schoolPrefix || s.registration_no?.startsWith(schoolPrefix)
-  ).length;
-
-  const nextSeq = String(schoolCount + 1).padStart(3, "0");
-  const generatedStudentId = registration_no || `${schoolPrefix}${roleCode}${nextSeq}`;
-  const studentEmail = email || `${generatedStudentId.toLowerCase()}@${schoolPrefix.toLowerCase()}.edu`;
-  const studentRoll = roll_no || `24${schoolPrefix.substring(0, 2)}${nextSeq}`;
-  const academicClass = grade || program || "Class 10";
-  const academicSection = section || "A";
-
-  const newStudentRecord: StudentRecord = {
-    id: `std-${Date.now()}`,
-    registration_no: generatedStudentId,
-    student_id: generatedStudentId,
-    roll_no: studentRoll,
-    name: `${first_name} ${last_name}`.trim(),
-    first_name,
-    last_name,
-    email: studentEmail,
-    phone: phone ?? "+91-9876500000",
-    gender: gender ?? "Not Specified",
-    date_of_birth: date_of_birth ?? "2008-01-01",
-    program: `${academicClass} (Section ${academicSection})`,
-    department: "High School Division",
-    semester: parseInt(academicClass.replace(/[^0-9]/g, "")) || 10,
-    status: "Enrolled",
-    cgpa: "9.00",
-    attendance: "100%",
+    id: s.id,
+    registration_no: s.registration_no,
+    student_id: s.registration_no,
+    roll_no: current?.roll_no ?? s.roll_no ?? "",
+    name: `${s.first_name} ${s.last_name}`.trim(),
+    first_name: s.first_name,
+    last_name: s.last_name,
+    email: "",
+    phone: "",
+    gender: s.gender ?? "",
+    date_of_birth: s.date_of_birth ?? "",
+    program: current
+      ? `${current.grades?.name ?? "Unassigned"}${current.sections?.name ? ` (Section ${current.sections.name})` : ""}`
+      : "Unassigned",
+    department: s.institutions?.name ?? "",
+    semester: current?.grades?.sort_order ?? 0,
+    status: s.status,
+    cgpa: "—",
+    attendance: "—",
     guardian: {
-      name: guardian_name ?? "Guardian",
-      phone: guardian_phone ?? "+91-9876500001",
-      relation: guardian_relation ?? "Parent",
+      name: link?.guardians?.full_name ?? "",
+      phone: link?.guardians?.phone ?? "",
+      relation: link?.relation ?? "",
     },
-    address: address ?? "Campus Enclave",
-    school_name,
-    school_code: schoolPrefix,
-    created_at: new Date().toISOString(),
+    address: "",
+    school_name: s.institutions?.name ?? "",
+    school_code: s.institutions?.code ?? "",
+    created_at: s.created_at,
+  };
+}
+
+// ─────────────────────────────────────────────
+//  Stats
+// ─────────────────────────────────────────────
+export async function getSisStats(institutionId: string | null) {
+  const count = async (table: string, apply?: (q: any) => any) => {
+    let q = supabaseAdmin.from(table).select("*", { count: "exact", head: true });
+    if (institutionId) q = q.eq("institution_id", institutionId);
+    if (apply) q = apply(q);
+    const { count: n, error } = await q;
+    if (error) throw new HttpError(500, error.message);
+    return n ?? 0;
   };
 
-  // ── Persist to Supabase Database ─────────────────────────────
-  try {
-    let profileId: string | null = null;
-    const { data: role } = await supabaseAdmin.from("roles").select("id").eq("name", "Student").single();
-    const { data: profile } = await supabaseAdmin
-      .from("user_profiles")
-      .insert({
-        email: studentEmail,
-        first_name,
-        last_name,
-        phone: phone ?? null,
-        role_id: role?.id ?? null,
-      })
-      .select("id")
-      .single();
+  const [students, grades, sections, faculty] = await Promise.all([
+    count("students", (q) => q.is("deleted_at", null).eq("status", "Enrolled")),
+    count("grades", (q) => q.eq("is_active", true)),
+    count("sections"),
+    // user_profiles reference roles by id; resolve Faculty role first
+    (async () => {
+      const { data: role } = await supabaseAdmin.from("roles").select("id").eq("name", "Faculty").maybeSingle();
+      if (!role) return 0;
+      return count("user_profiles", (q) => q.eq("role_id", role.id).eq("status", "active"));
+    })(),
+  ]);
 
-    if (profile?.id) profileId = profile.id;
+  return {
+    totalStudents: students,
+    totalFaculty: faculty,
+    totalGrades: grades,
+    totalSections: sections,
+    // legacy keys still read by the current dashboard
+    totalDepartments: grades,
+    totalPrograms: sections,
+    activeBatches: sections,
+    attendanceRate: "N/A",
+  };
+}
 
-    const { data: student } = await supabaseAdmin
-      .from("students")
-      .insert({
-        user_profile_id: profileId,
-        registration_no: generatedStudentId,
-        roll_no: studentRoll,
-        current_semester: parseInt(academicClass.replace(/[^0-9]/g, "")) || 10,
-        status: "Enrolled",
-        admission_date: new Date().toISOString().split("T")[0],
-      })
-      .select()
-      .single();
+// ─────────────────────────────────────────────
+//  Directory
+// ─────────────────────────────────────────────
+export async function listStudents(
+  institutionId: string | null,
+  opts: { search?: string; status?: string; limit?: number; offset?: number }
+) {
+  const limit = Math.min(100, Math.max(1, opts.limit ?? 20));
+  const offset = Math.max(0, opts.offset ?? 0);
 
-    if (student?.id) {
-      newStudentRecord.id = student.id;
-    }
-  } catch {
-    // Graceful fallback to registered registry
+  let q = supabaseAdmin
+    .from("students")
+    .select(STUDENT_SELECT, { count: "exact" })
+    .is("deleted_at", null)
+    .order("created_at", { ascending: false })
+    .range(offset, offset + limit - 1);
+
+  if (institutionId) q = q.eq("institution_id", institutionId);
+  if (opts.status) q = q.eq("status", opts.status);
+  const search = safeSearch(opts.search);
+  if (search) {
+    q = q.or(`registration_no.ilike.%${search}%,first_name.ilike.%${search}%,last_name.ilike.%${search}%`);
   }
 
-  // Add to active in-memory registry
-  enrolledStudentsRegistry.unshift(newStudentRecord);
+  const { data, count, error } = await q;
+  if (error) throw new HttpError(500, error.message);
 
-  return newStudentRecord;
+  return { students: (data ?? []).map(toRecord), total: count ?? 0 };
+}
+
+// ─────────────────────────────────────────────
+//  Enrollment
+// ─────────────────────────────────────────────
+async function findGrade(institutionId: string, input: string) {
+  const text = input.trim();
+  const digits = text.replace(/\D/g, "");
+  const candidates = [text, digits ? `G${digits}` : "", digits ? `Class ${digits}` : ""].filter(Boolean);
+
+  for (const c of candidates) {
+    const { data } = await supabaseAdmin
+      .from("grades")
+      .select("id, name")
+      .eq("institution_id", institutionId)
+      .eq("is_active", true)
+      .or(`code.ilike.${c.replace(/[,()%*\\]/g, " ")},name.ilike.${c.replace(/[,()%*\\]/g, " ")}`)
+      .limit(1);
+    if (data?.length) return data[0];
+  }
+  throw new HttpError(400, `Grade '${input}' is not configured for this school. Create it under academic setup first.`);
+}
+
+/**
+ * Enroll a new student into the current academic year.
+ * The registration number is generated server-side from an atomic per-school
+ * counter: [SchoolCode]ST[3-digit sequence], e.g. RAVST001. Client-supplied IDs are ignored.
+ */
+export async function enrollStudent(institutionId: string, input: EnrollStudentInput, actorProfileId?: string) {
+  const { data: institution, error: instError } = await supabaseAdmin
+    .from("institutions")
+    .select("id, code, name, is_active")
+    .eq("id", institutionId)
+    .maybeSingle();
+  if (instError) throw new HttpError(500, instError.message);
+  if (!institution || !institution.is_active) throw new HttpError(404, "School not found or inactive.");
+
+  const { data: year } = await supabaseAdmin
+    .from("academic_years")
+    .select("id, is_locked")
+    .eq("institution_id", institutionId)
+    .eq("is_current", true)
+    .maybeSingle();
+  if (!year) throw new HttpError(400, "No current academic year is configured for this school.");
+  if (year.is_locked) throw new HttpError(409, "The current academic year is locked.");
+
+  // plan gating: the student limit comes from the school's current plan
+  const access = await loadSchoolAccess(institutionId);
+  if (access.studentLimit !== null) {
+    const { count: enrolled } = await supabaseAdmin
+      .from("students")
+      .select("*", { count: "exact", head: true })
+      .eq("institution_id", institutionId)
+      .eq("status", "Enrolled")
+      .is("deleted_at", null);
+    if ((enrolled ?? 0) >= access.studentLimit) {
+      throw new HttpError(409, `The ${access.planCode} plan allows ${access.studentLimit} students and this school has reached the limit. Upgrade the plan to enrol more.`);
+    }
+  }
+
+  const grade = await findGrade(institutionId, input.grade);
+
+  let sectionId: string | null = null;
+  let campusId: string | null = null;
+  let sectionCount = 0;
+  if (input.section?.trim()) {
+    const { data: section } = await supabaseAdmin
+      .from("sections")
+      .select("id, capacity, campus_id")
+      .eq("institution_id", institutionId)
+      .eq("grade_id", grade.id)
+      .eq("academic_year_id", year.id)
+      .ilike("name", input.section.trim())
+      .maybeSingle();
+    if (!section) throw new HttpError(400, `Section '${input.section}' does not exist for ${grade.name}.`);
+
+    const { count } = await supabaseAdmin
+      .from("student_enrollments")
+      .select("*", { count: "exact", head: true })
+      .eq("section_id", section.id)
+      .eq("status", "Active");
+    sectionCount = count ?? 0;
+    if (sectionCount >= section.capacity) throw new HttpError(409, `Section ${input.section} is full (${section.capacity}).`);
+
+    sectionId = section.id;
+    campusId = section.campus_id;
+  }
+
+  const { data: seq, error: seqError } = await supabaseAdmin.rpc("next_sequence", {
+    p_institution: institutionId,
+    p_kind: "student",
+    p_scope: "",
+  });
+  if (seqError || seq == null) throw new HttpError(500, seqError?.message ?? "Could not allocate a student number.");
+
+  const registrationNo = `${institution.code.toUpperCase()}ST${String(seq).padStart(3, "0")}`;
+  const rollNo = input.roll_no?.trim() || String(sectionCount + 1);
+
+  const { data: student, error: studentError } = await supabaseAdmin
+    .from("students")
+    .insert({
+      institution_id: institutionId,
+      campus_id: campusId,
+      registration_no: registrationNo,
+      roll_no: rollNo,
+      first_name: input.first_name.trim(),
+      last_name: input.last_name.trim(),
+      gender: input.gender || null,
+      date_of_birth: input.date_of_birth || null,
+      status: "Enrolled",
+    })
+    .select("id")
+    .single();
+  if (studentError || !student) throw new HttpError(500, studentError?.message ?? "Failed to create student.");
+
+  // Everything below is part of the same logical write; undo the student if any step fails.
+  try {
+    const { error: enrollError } = await supabaseAdmin.from("student_enrollments").insert({
+      institution_id: institutionId,
+      student_id: student.id,
+      academic_year_id: year.id,
+      grade_id: grade.id,
+      section_id: sectionId,
+      roll_no: rollNo,
+    });
+    if (enrollError) throw new Error(enrollError.message);
+
+    if (input.address || input.gender || input.date_of_birth) {
+      const { error } = await supabaseAdmin.from("student_profiles").insert({
+        student_id: student.id,
+        date_of_birth: input.date_of_birth || null,
+        gender: input.gender || "Not Specified",
+        permanent_address: input.address || null,
+      });
+      if (error) throw new Error(error.message);
+    }
+
+    if (input.guardian_name?.trim() && input.guardian_phone?.trim()) {
+      const { data: guardian, error: gError } = await supabaseAdmin
+        .from("guardians")
+        .insert({
+          institution_id: institutionId,
+          full_name: input.guardian_name.trim(),
+          phone: input.guardian_phone.trim(),
+        })
+        .select("id")
+        .single();
+      if (gError || !guardian) throw new Error(gError?.message ?? "Failed to create guardian.");
+
+      const { error: linkError } = await supabaseAdmin.from("student_guardians").insert({
+        student_id: student.id,
+        guardian_id: guardian.id,
+        relation: input.guardian_relation || "Parent",
+        is_primary_contact: true,
+      });
+      if (linkError) throw new Error(linkError.message);
+    }
+  } catch (err) {
+    await supabaseAdmin.from("students").delete().eq("id", student.id);
+    throw new HttpError(500, err instanceof Error ? err.message : "Enrollment failed.");
+  }
+
+  const { data: created, error: readError } = await supabaseAdmin
+    .from("students")
+    .select(STUDENT_SELECT)
+    .eq("id", student.id)
+    .single();
+  if (readError || !created) throw new HttpError(500, readError?.message ?? "Enrolled, but could not reload the record.");
+
+  void actorProfileId; // recorded by the global audit logger
+  return toRecord(created);
 }

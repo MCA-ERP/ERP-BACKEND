@@ -10,5 +10,5 @@ authRouter.post("/login", loginController);
 // GET  /api/v1/auth/me      — Current session profile (protected)
 authRouter.get("/me", authGuard, meController);
 
-// GET  /api/v1/auth/roles   — List all ERP roles
-authRouter.get("/roles", rolesController);
+// GET  /api/v1/auth/roles   — List all ERP roles (protected)
+authRouter.get("/roles", authGuard, rolesController);

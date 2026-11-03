@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { authGuard } from "../../middleware/authGuard";
+import { requireModule, requirePermission } from "../../middleware/rbacGuard";
 import {
   statsController,
   listStudentsController,
@@ -8,11 +9,13 @@ import {
 
 export const sisRouter = Router();
 
-// GET  /api/v1/sis/stats      — Dashboard KPI metrics
-sisRouter.get("/stats", statsController);
+sisRouter.use(authGuard, requireModule("student_information"));
 
-// GET  /api/v1/sis/students   — Student directory (protected)
-sisRouter.get("/students", authGuard, listStudentsController);
+// GET  /api/v1/sis/stats      — KPI counts for the caller's institution
+sisRouter.get("/stats", requirePermission("sis.student.view"), statsController);
 
-// POST /api/v1/sis/students   — Enroll new student (auto Student ID)
-sisRouter.post("/students", enrollStudentController);
+// GET  /api/v1/sis/students   — Student directory
+sisRouter.get("/students", requirePermission("sis.student.view"), listStudentsController);
+
+// POST /api/v1/sis/students   — Enroll a new student (auto registration number)
+sisRouter.post("/students", requirePermission("sis.student.create"), enrollStudentController);
