@@ -1,4 +1,6 @@
 import { Router } from "express";
+import { authGuard } from "../../middleware/authGuard";
+import { requireRoles } from "../../middleware/rbacGuard";
 import {
   getInstitutionController,
   listSchoolsController,
@@ -9,13 +11,13 @@ import {
 export const institutionRouter = Router();
 
 // GET  /api/v1/institution              — Primary institution profile
-institutionRouter.get("/", getInstitutionController);
+institutionRouter.get("/", authGuard, getInstitutionController);
 
-// GET  /api/v1/institution/all          — All registered schools
-institutionRouter.get("/all", listSchoolsController);
+// GET  /api/v1/institution/all          — All registered schools (SuperAdmin)
+institutionRouter.get("/all", authGuard, requireRoles(), listSchoolsController);
 
 // POST /api/v1/institution/register     — Register a new school (SuperAdmin)
-institutionRouter.post("/register", registerSchoolController);
+institutionRouter.post("/register", authGuard, requireRoles(), registerSchoolController);
 
-// GET  /api/v1/institution/by-code/:code — Lookup school by short code
+// GET  /api/v1/institution/by-code/:code — Public lookup (name/code only, see controller)
 institutionRouter.get("/by-code/:code", getSchoolByCodeController);

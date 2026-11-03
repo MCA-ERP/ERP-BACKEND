@@ -1,10 +1,11 @@
 import { Router } from "express";
-import { departmentsController, timetableController } from "./academics.controller";
+import { authGuard } from "../../middleware/authGuard";
+import { requireModule, requirePermission } from "../../middleware/rbacGuard";
+import { timetableController } from "./academics.controller";
 
 export const academicsRouter = Router();
 
-// GET /api/v1/academics/departments  — Department + programs list
-academicsRouter.get("/departments", departmentsController);
+academicsRouter.use(authGuard, requireModule("timetable"));
 
-// GET /api/v1/academics/timetable    — Weekly master timetable
-academicsRouter.get("/timetable", timetableController);
+// GET /api/v1/academics/timetable    — Weekly timetable
+academicsRouter.get("/timetable", requirePermission("academics.timetable.view"), timetableController);
