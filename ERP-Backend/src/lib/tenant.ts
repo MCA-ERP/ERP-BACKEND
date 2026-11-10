@@ -30,7 +30,7 @@ export async function institutionIdByCode(code: string): Promise<string> {
   const { data, error } = await supabaseAdmin
     .from("institutions")
     .select("id, is_active")
-    .ilike("code", code.trim())
+    .eq("code", code.trim().toUpperCase())
     .maybeSingle();
   if (error) throw new HttpError(500, error.message);
   if (!data) throw new HttpError(404, `School code '${code.toUpperCase()}' not found.`);

@@ -3,7 +3,7 @@ import { supabaseAdmin } from "../../db/client";
 
 const SENSITIVE_KEYS = /pass(word)?|secret|token|api[_-]?key/i;
 
-function redact(value: unknown): unknown {
+export function redact(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redact);
   if (value && typeof value === "object") {
     return Object.fromEntries(
@@ -30,7 +30,7 @@ export async function auditLogger(req: Request, res: Response, next: NextFunctio
       try {
         const actorId = req.user?.profileId || null;
         const actorEmail = req.user?.email || "anonymous";
-        const ipAddress = (req.headers["x-forwarded-for"] as string) || req.socket.remoteAddress || "";
+        const ipAddress = req.ip || req.socket.remoteAddress || ""; // honours trust proxy; the raw header is spoofable
         const userAgent = req.headers["user-agent"] || "";
 
         await supabaseAdmin.from("audit_logs").insert({
