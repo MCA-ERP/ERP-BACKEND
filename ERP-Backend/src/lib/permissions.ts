@@ -23,4 +23,18 @@ export async function getRolePermissions(roleId: string): Promise<string[]> {
 
 export function clearPermissionCache(): void {
   cache.clear();
+  limitCache.clear();
+}
+
+const limitCache = new Map<string, { at: number; modules: string[] | null }>();
+
+/** Modules a role is limited to, or null when it may open every module its school has. */
+export async function getRoleModuleLimit(roleId: string): Promise<string[] | null> {
+  const hit = limitCache.get(roleId);
+  if (hit && Date.now() - hit.at < TTL_MS) return hit.modules;
+  const { data } = await supabaseAdmin.from("role_modules").select("module_code").eq("role_id", roleId);
+  const rows = ((data ?? []) as { module_code: string }[]).map((r) => r.module_code);
+  const modules = rows.length ? rows : null;
+  limitCache.set(roleId, { at: Date.now(), modules });
+  return modules;
 }

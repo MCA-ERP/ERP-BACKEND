@@ -4,35 +4,52 @@
   "description": "API-First Modular Backend & Database for Education ERP",
   "main": "src/server.ts",
   "scripts": {
-    "dev": "tsc && node dist/src/server.js",
+    "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/src/server.js",
     "migrate": "node db/migrate.js",
     "migrate:status": "node db/migrate.js status",
     "migrate:dry": "node db/migrate.js --dry-run",
-    "seed:dev": "node db/migrate.js seed dev"
+    "seed:dev": "node db/migrate.js seed dev",
+    "dev:build": "tsc && node dist/src/server.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "dev:node20": ".\\use-node20.cmd tsx watch src/server.ts",
+    "build:node20": ".\\use-node20.cmd tsc",
+    "start:node20": ".\\use-node20.cmd node dist/src/server.js",
+    "test:node20": ".\\use-node20.cmd vitest run"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",
     "@types/pg": "^8.23.1",
-    "bcryptjs": "^3.0.2",
     "cors": "^2.8.5",
     "cross-fetch": "^4.1.0",
     "dotenv": "^16.6.1",
     "express": "^4.21.2",
-    "jsonwebtoken": "^9.0.2",
+    "express-rate-limit": "^7.5.1",
+    "helmet": "^7.2.0",
+    "nodemailer": "^10.3.1",
     "pg": "^8.23.1",
     "ws": "^8.22.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/bcryptjs": "^2.4.6",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
-    "@types/jsonwebtoken": "^9.0.9",
+    "@types/mailparser": "^3.4.5",
     "@types/node": "^20.17.24",
+    "@types/nodemailer": "^6.4.17",
+    "@types/smtp-server": "^3.5.10",
     "@types/ws": "^8.18.2",
+    "mailparser": "^3.7.1",
+    "smtp-server": "^3.13.6",
     "tsx": "^4.19.3",
-    "typescript": "^5.8.2"
+    "typescript": "^5.8.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.1.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   }
 }

@@ -11,6 +11,8 @@ export interface ModuleAccess {
   /** per-school override: true = forced on, false = forced off, null = follow the plan */
   override: boolean | null;
   effective: boolean;
+  /** Modules this one needs that are not usable, which is why it is off. */
+  missing?: string[];
 }
 
 export interface SchoolAccess {
@@ -22,7 +24,7 @@ export interface SchoolAccess {
 
 /** Compute, from the database, what a school may use right now. */
 export async function loadSchoolAccess(institutionId: string): Promise<SchoolAccess> {
-  const [inst, sub, mods, overrides] = await Promise.all([
+  const [inst, sub, mods, overrides, depRows] = await Promise.all([
     supabaseAdmin.from("institutions").select("status").eq("id", institutionId).maybeSingle(),
     supabaseAdmin
       .from("subscriptions")
@@ -32,6 +34,7 @@ export async function loadSchoolAccess(institutionId: string): Promise<SchoolAcc
       .maybeSingle(),
     supabaseAdmin.from("modules").select("code, name, is_core, is_enabled").order("sort_order"),
     supabaseAdmin.from("institution_modules").select("module_code, enabled").eq("institution_id", institutionId),
+    supabaseAdmin.from("module_dependencies").select("module_code, requires_code"),
   ]);
 
   const institution = check(inst) as { status: string } | null;
@@ -49,6 +52,9 @@ export async function loadSchoolAccess(institutionId: string): Promise<SchoolAcc
     (check(overrides) as { module_code: string; enabled: boolean }[]).map((o) => [o.module_code, o.enabled])
   );
 
+  const requires = new Map<string, string[]>();
+  (check(depRows) as { module_code: string; requires_code: string }[]).forEach((d) => requires.set(d.module_code, [...(requires.get(d.module_code) ?? []), d.requires_code]));
+
   const modules = (check(mods) as { code: string; name: string; is_core: boolean; is_enabled: boolean }[]).map((m) => {
     const override = overrideMap.has(m.code) ? overrideMap.get(m.code)! : null;
     const via_plan = m.is_core || planModules.has(m.code);
@@ -61,8 +67,24 @@ export async function loadSchoolAccess(institutionId: string): Promise<SchoolAcc
       via_plan,
       override,
       effective: m.is_enabled && allowed,
+      missing: [] as string[],
     };
   });
+
+  // a module is only usable while everything it needs is usable too (repeat until nothing changes)
+  const byCode = new Map(modules.map((m) => [m.code, m]));
+  for (let changed = true, guard = 0; changed && guard < 30; guard++) {
+    changed = false;
+    for (const m of modules) {
+      if (!m.effective) continue;
+      const missing = (requires.get(m.code) ?? []).filter((r) => !byCode.get(r)?.effective);
+      if (missing.length) {
+        m.effective = false;
+        m.missing = missing;
+        changed = true;
+      }
+    }
+  }
 
   return {
     status: institution?.status ?? "Suspended",

@@ -37,6 +37,7 @@ export function requirePermission(...codes: string[]) {
     if (req.user.role === "SuperAdmin" || codes.every((c) => req.user!.permissions.includes(c))) {
       return next();
     }
+    if (res.locals) res.locals.denied = codes.join(" or ");
     res.status(403).json({ error: "Forbidden. Missing permission.", requiredPermissions: codes });
   };
 }

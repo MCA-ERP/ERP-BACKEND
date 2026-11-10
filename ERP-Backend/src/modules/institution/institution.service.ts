@@ -69,7 +69,7 @@ export async function getSchoolByCode(code: string) {
   const { data, error } = await supabaseAdmin
     .from("institutions")
     .select("*")
-    .ilike("code", code.trim())
+    .eq("code", code.trim().toUpperCase())
     .is("deleted_at", null)
     .maybeSingle();
   if (error) throw new HttpError(500, error.message);

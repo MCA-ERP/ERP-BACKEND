@@ -2,6 +2,8 @@ import { supabaseAdmin } from "../../../db/client";
 import { check } from "../../lib/db";
 import { clearEntitlementCache, loadSchoolAccess } from "../../lib/entitlements";
 import { HttpError } from "../../lib/http-error";
+import { assertDependenciesMet } from "./module-config.service";
+import { getSetting } from "./settings.service";
 
 const LIVE_STATUSES = ["Trial", "Active", "Overdue"];
 
@@ -12,13 +14,17 @@ interface ModuleRow {
   is_core: boolean;
   is_enabled: boolean;
   sort_order: number;
+  category: string;
+  build_status: string;
+  addon_price_paise: number;
+  version: string | null;
 }
 
 async function allModules(): Promise<ModuleRow[]> {
   return check(
     await supabaseAdmin
       .from("modules")
-      .select("code, name, description, is_core, is_enabled, sort_order")
+      .select("code, name, description, is_core, is_enabled, sort_order, category, build_status, addon_price_paise, version")
       .order("sort_order")
   ) as ModuleRow[];
 }
@@ -103,6 +109,7 @@ export async function setPlanModules(planCode: string, moduleCodes: string[]) {
 
   // core modules are part of every plan
   const wanted = Array.from(new Set([...moduleCodes, ...modules.filter((m) => m.is_core).map((m) => m.code)]));
+  await assertDependenciesMet(new Set(wanted), "A plan cannot include a module without what it needs");
 
   check(await supabaseAdmin.from("plan_modules").delete().eq("plan_id", plan.id));
   const res = await supabaseAdmin.from("plan_modules").insert(wanted.map((module_code) => ({ plan_id: plan.id, module_code })));
@@ -131,6 +138,24 @@ export async function setSchoolModuleOverride(
   ) as { is_core: boolean } | null;
   if (!mod) throw new HttpError(404, "Module not found.");
   if (mod.is_core) throw new HttpError(400, "A core module is always on and cannot be overridden.");
+
+  // switching something on needs its requirements on; switching it off must not strand a module that needs it
+  const before = await loadSchoolAccess(institutionId);
+  const cur = before.modules.find((m) => m.code === code);
+  if (!cur) throw new HttpError(404, "Module not found.");
+  const willBeOn = enabled === null ? cur.via_plan : enabled;
+  const depRows = check(await supabaseAdmin.from("module_dependencies").select("module_code, requires_code")) as { module_code: string; requires_code: string }[];
+  const label = new Map(before.modules.map((m) => [m.code, m.name]));
+  if (willBeOn) {
+    const off = depRows.filter((d) => d.module_code === code && !before.modules.find((m) => m.code === d.requires_code)?.effective).map((d) => label.get(d.requires_code) ?? d.requires_code);
+    if (off.length) throw new HttpError(409, `${cur.name} needs ${off.join(" and ")} turned on first.`);
+    if (enabled === true && !cur.via_plan && !(await getSetting<boolean>("modules.allow_addons", true))) {
+      throw new HttpError(409, "Add-on modules are switched off in Module configuration.");
+    }
+  } else {
+    const stranded = depRows.filter((d) => d.requires_code === code && before.modules.find((m) => m.code === d.module_code)?.effective).map((d) => label.get(d.module_code) ?? d.module_code);
+    if (stranded.length) throw new HttpError(409, `Turn off ${stranded.join(" and ")} first: ${stranded.length === 1 ? "it needs" : "they need"} ${cur.name}.`);
+  }
 
   if (enabled === null) {
     check(
