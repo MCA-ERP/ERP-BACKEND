@@ -18,7 +18,19 @@
     "dev:node20": ".\\use-node20.cmd tsx watch src/server.ts",
     "build:node20": ".\\use-node20.cmd tsc",
     "start:node20": ".\\use-node20.cmd node dist/src/server.js",
-    "test:node20": ".\\use-node20.cmd vitest run"
+    "test:node20": ".\\use-node20.cmd vitest run",
+    "dev:dev": "node scripts/run-with-env.js dev -- tsx watch src/server.ts",
+    "start:dev": "node scripts/run-with-env.js dev -- node dist/src/server.js",
+    "migrate:dev": "node scripts/run-with-env.js dev -- node db/migrate.js",
+    "dev:uat": "node scripts/run-with-env.js uat -- tsx watch src/server.ts",
+    "start:uat": "node scripts/run-with-env.js uat -- node dist/src/server.js",
+    "migrate:uat": "node scripts/run-with-env.js uat -- node db/migrate.js",
+    "dev:preprod": "node scripts/run-with-env.js preprod -- tsx watch src/server.ts",
+    "start:preprod": "node scripts/run-with-env.js preprod -- node dist/src/server.js",
+    "migrate:preprod": "node scripts/run-with-env.js preprod -- node db/migrate.js",
+    "dev:prod": "node scripts/run-with-env.js prod -- tsx watch src/server.ts",
+    "start:prod": "node scripts/run-with-env.js prod -- node dist/src/server.js",
+    "migrate:prod": "node scripts/run-with-env.js prod -- node db/migrate.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.1",
