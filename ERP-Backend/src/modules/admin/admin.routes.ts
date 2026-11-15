@@ -17,6 +17,7 @@ import { moduleConfigRouter } from "./admin.module-config.routes";
 import { usersRouter } from "./admin.users.routes";
 import { rolesRouter } from "./admin.roles.routes";
 import * as topbar from "./topbar.service";
+import * as assist from "./assist.service";
 import * as rolesvc from "./roles-mgmt.service";
 import * as subsvc from "./subscriptions.service";
 
@@ -372,6 +373,22 @@ adminRouter.use(rolesRouter);
 const canView = (req: Request) => (area: string) => req.user?.role === "SuperAdmin" || !!req.user?.permissions.includes(`platform.${area}.view`);
 adminRouter.get("/search", h(async (req, res) => res.json(await topbar.search(req.query.q, canView(req)))));
 adminRouter.get("/notifications", h(async (req, res) => res.json(await topbar.notifications(canView(req)))));
+// "Ask AI": the assistant in the corner of the portal
+const chatSchema = z.object({
+  messages: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().trim().min(1).max(4000) })).min(1).max(20),
+  page: z.string().trim().max(200).optional(),
+});
+const noticeSchema = z.object({ points: z.string().trim().min(5, "Tell me what the notice is about.").max(2000), kind: z.enum(assist.NOTICE_KINDS) });
+adminRouter.post("/assist/notice", h(async (req, res) => {
+  const { points, kind } = noticeSchema.parse(req.body);
+  res.json(await assist.draftNotice(points, kind, req.user?.profileId ?? "anonymous"));
+}));
+adminRouter.get("/assist/status", h(async (_req, res) => res.json({ configured: assist.assistConfigured() })));
+adminRouter.post("/assist/chat", h(async (req, res) => {
+  const { messages, page } = chatSchema.parse(req.body);
+  if (messages[messages.length - 1].role !== "user") return res.status(400).json({ error: "Ask a question first." });
+  return res.json(await assist.chat(messages, page, req.user?.profileId ?? "anonymous"));
+}));
 adminRouter.use(billingRouter);
 adminRouter.use(insightsRouter);
 

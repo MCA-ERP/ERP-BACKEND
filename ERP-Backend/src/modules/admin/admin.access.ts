@@ -19,6 +19,7 @@ const AREA: Record<string, string> = {
   "module-config": "modules",
   "role-config": "roles",
   search: "dashboard",
+  assist: "dashboard",
   notifications: "dashboard",
   users: "users",
   "user-directory": "users",
@@ -59,6 +60,7 @@ export function requiredPermission(method: string, path: string): string | null 
     } else if (["status", "status-action", "approve", "primary-admin"].includes(parts[2])) act = "edit";
     else if (parts[2] === "documents" && parts[4] === "review") act = "edit";
   }
+  if (parts[0] === "assist") act = "view"; // asking a question changes nothing
   if (parts[0] === "plans" && parts[2] === "modules") area = "modules";
   if (parts[0] === "user-directory" && act === "create") act = "edit";
   if (parts[0] === "support" && act === "create" && (parts[1] === "assign" || parts[1] === "reassign")) act = "edit";

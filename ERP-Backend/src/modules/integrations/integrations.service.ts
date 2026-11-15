@@ -31,11 +31,11 @@ export async function listServices() {
   const planned = (group: string, key: string, name: string, description: string): Service => ({ group, key, name, description, status: "Planned" });
 
   const services: Service[] = [
-    { group: "Payments", key: "razorpay", name: "Razorpay", description: "Online fee and subscription payments", status: razorpayConfigured() ? "Connected" : "Not configured", link: "/admin/payments" },
+    { group: "Payments", key: "razorpay", name: "Razorpay", description: "Online fee and subscription payments", status: razorpayConfigured() ? "Connected" : "Not configured", link: "/super-admin/payments" },
     { group: "Core", key: "supabase", name: "Supabase", description: "Database, sign-in and file storage", status: db.ok ? "Connected" : "Not configured" },
-    { group: "Messaging", key: "sms", name: "SMS (MSG91)", description: "Reminders and announcements with DLT-approved templates", status: smsConfigured() ? "Connected" : "Not configured", link: "/admin/integrations" },
-    { group: "Messaging", key: "whatsapp", name: "WhatsApp Business", description: "Template messages through Meta's WhatsApp Business Cloud API", status: whatsappConfigured() ? "Connected" : "Not configured", link: "/admin/communication" },
-    { group: "Messaging", key: "email", name: "Email (SMTP)", description: "Invoices, reminders and announcements through any SMTP provider", status: emailConfigured() ? "Connected" : "Not configured", link: "/admin/settings" },
+    { group: "Messaging", key: "sms", name: "SMS (MSG91)", description: "Reminders and announcements with DLT-approved templates", status: smsConfigured() ? "Connected" : "Not configured", link: "/super-admin/integrations" },
+    { group: "Messaging", key: "whatsapp", name: "WhatsApp Business", description: "Template messages through Meta's WhatsApp Business Cloud API", status: whatsappConfigured() ? "Connected" : "Not configured", link: "/super-admin/communication" },
+    { group: "Messaging", key: "email", name: "Email (SMTP)", description: "Invoices, reminders and announcements through any SMTP provider", status: emailConfigured() ? "Connected" : "Not configured", link: "/super-admin/settings" },
     planned("Learning & productivity", "google", "Google Workspace", "Sign in with Google, Classroom sync"),
     planned("Learning & productivity", "zoom", "Zoom", "Live online classes"),
     planned("Learning & productivity", "microsoft", "Microsoft 365", "Teams classes, Outlook sign-in"),
