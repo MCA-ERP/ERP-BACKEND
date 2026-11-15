@@ -1,0 +1,73 @@
+name: Backend CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ERP-Backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ERP-Backend/package-lock.json
+      - run: npm ci
+      - name: Type check
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test
+      - name: Build
+        run: npm run build
+
+  audit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ERP-Backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Known vulnerabilities in production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+  migrations:
+    # Applies every migration to an empty Postgres to prove the whole history still runs.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ERP-Backend
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ERP-Backend/package-lock.json
+      - run: npm ci
+      - name: Apply migrations
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres?sslmode=disable
+        run: node db/migrate.js

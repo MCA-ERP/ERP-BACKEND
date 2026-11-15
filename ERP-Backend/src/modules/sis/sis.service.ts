@@ -135,7 +135,7 @@ export async function getSisStats(institutionId: string | null) {
 // ─────────────────────────────────────────────
 export async function listStudents(
   institutionId: string | null,
-  opts: { search?: string; status?: string; limit?: number; offset?: number }
+  opts: { search?: string; status?: string; limit?: number; offset?: number; campusId?: string }
 ) {
   const limit = Math.min(100, Math.max(1, opts.limit ?? 20));
   const offset = Math.max(0, opts.offset ?? 0);
@@ -148,6 +148,7 @@ export async function listStudents(
     .range(offset, offset + limit - 1);
 
   if (institutionId) q = q.eq("institution_id", institutionId);
+  if (opts.campusId) q = q.eq("campus_id", opts.campusId);
   if (opts.status) q = q.eq("status", opts.status);
   const search = safeSearch(opts.search);
   if (search) {
@@ -230,7 +231,7 @@ export async function enrollStudent(institutionId: string, input: EnrollStudentI
       .eq("institution_id", institutionId)
       .eq("grade_id", grade.id)
       .eq("academic_year_id", year.id)
-      .ilike("name", input.section.trim())
+      .eq("name", input.section.trim())
       .maybeSingle();
     if (!section) throw new HttpError(400, `Section '${input.section}' does not exist for ${grade.name}.`);
 

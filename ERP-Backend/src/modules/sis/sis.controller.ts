@@ -46,6 +46,8 @@ export async function listStudentsController(req: Request, res: Response): Promi
         status: req.query.status as string | undefined,
         limit: parseInt(req.query.limit as string, 10) || 20,
         offset: parseInt(req.query.offset as string, 10) || 0,
+        // roles with campus data scope see only their own campus
+        campusId: req.user?.dataScope === "campus" && req.user.campusId ? req.user.campusId : undefined,
       })
     );
   } catch (err) {

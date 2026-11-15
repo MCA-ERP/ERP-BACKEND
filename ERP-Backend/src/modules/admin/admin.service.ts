@@ -1,7 +1,10 @@
 import { supabaseAdmin } from "../../../db/client";
+import { assertRoomFor } from "../../lib/plan-limits";
 import { clearPermissionCache } from "../../lib/permissions";
 import { HttpError } from "../../lib/http-error";
+import { checkPassword } from "../../lib/password-policy";
 import { check } from "../../lib/db";
+import { getSetting } from "./settings.service";
 import { parsePage, safeSearch } from "../../lib/query";
 
 export { HttpError };
@@ -20,6 +23,7 @@ export async function listCampuses(institutionId: string) {
 }
 
 export async function createCampus(institutionId: string, input: Record<string, any>) {
+  await assertRoomFor(institutionId, "campus");
   return check(
     await supabaseAdmin
       .from("campuses")
@@ -77,7 +81,11 @@ export async function createUser(input: {
   role: string;
   institution_id?: string | null;
   campus_id?: string | null;
-}) {
+  must_change_password?: boolean;
+}, actorRole?: string) {
+  if (input.role === "SuperAdmin" && actorRole !== "SuperAdmin") throw new HttpError(403, "Only a Super Administrator can create another Super Administrator.");
+  if (input.institution_id && !["SuperAdmin", "Student", "Parent"].includes(input.role)) await assertRoomFor(input.institution_id, "staff");
+  await checkPassword(input.password, [input.email, input.email.split("@")[0]]);
   const roleId = await roleIdByName(input.role);
   const email = input.email.toLowerCase();
 
@@ -103,6 +111,7 @@ export async function createUser(input: {
       role_id: roleId,
       institution_id: input.institution_id || null,
       campus_id: input.campus_id || null,
+      must_change_password: input.must_change_password ?? false,
       status: "active",
     })
     .select(USER_SELECT)
@@ -115,8 +124,9 @@ export async function createUser(input: {
   return res.data;
 }
 
-export async function updateUser(id: string, actorProfileId: string | undefined, patch: Record<string, any>) {
+export async function updateUser(id: string, actorProfileId: string | undefined, patch: Record<string, any>, actorRole?: string) {
   const { role, ...rest } = patch;
+  if (role === "SuperAdmin" && actorRole !== "SuperAdmin") throw new HttpError(403, "Only a Super Administrator can assign the Super Administrator role.");
   const update: Record<string, any> = { ...rest, updated_at: new Date().toISOString() };
 
   if (id === actorProfileId) {
@@ -147,7 +157,7 @@ export async function listRolesWithPermissions() {
   const roles = check(
     await supabaseAdmin
       .from("roles")
-      .select("id, name, display_name, description, is_system_default, role_permissions(permission_id)")
+      .select("id, name, display_name, description, is_system_default, scope, data_scope, institution_id, role_permissions(permission_id)")
       .order("name", { ascending: true })
   ) as any[];
 
@@ -161,6 +171,9 @@ export async function listRolesWithPermissions() {
     display_name: r.display_name,
     description: r.description,
     is_system_default: r.is_system_default,
+    scope: r.scope,
+    data_scope: r.data_scope,
+    institution_id: r.institution_id,
     permission_ids: (r.role_permissions ?? []).map((rp: { permission_id: string }) => rp.permission_id),
     user_count: userCount.get(r.id) ?? 0,
   }));
