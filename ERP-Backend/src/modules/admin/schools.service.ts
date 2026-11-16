@@ -106,7 +106,16 @@ export async function listSchools(query: Record<string, unknown>) {
     groupCount(GROUPS.inactive),
     groupCount(GROUPS.suspended),
   ]);
-  const items = check(res);
+  const rows = check(res) as { id: string }[];
+
+  // how many campuses each school on this page has, and how many there are in all
+  const [camp, campTotal] = await Promise.all([
+    rows.length ? supabaseAdmin.from("campuses").select("institution_id").in("institution_id", rows.map((r) => r.id)).limit(10_000) : Promise.resolve({ data: [] }),
+    supabaseAdmin.from("campuses").select("*", { count: "exact", head: true }),
+  ]);
+  const perSchool = new Map<string, number>();
+  for (const c of ((camp.data ?? []) as { institution_id: string }[])) perSchool.set(c.institution_id, (perSchool.get(c.institution_id) ?? 0) + 1);
+  const items = rows.map((r) => ({ ...r, campuses: perSchool.get(r.id) ?? 0 }));
 
   return {
     items,
@@ -119,6 +128,7 @@ export async function listSchools(query: Record<string, unknown>) {
       active: active.count ?? 0,
       inactive: inactive.count ?? 0,
       suspended: suspended.count ?? 0,
+      campuses: campTotal.count ?? 0,
     },
   };
 }

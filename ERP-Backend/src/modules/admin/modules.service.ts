@@ -24,7 +24,7 @@ async function allModules(): Promise<ModuleRow[]> {
   return check(
     await supabaseAdmin
       .from("modules")
-      .select("code, name, description, is_core, is_enabled, sort_order, category, build_status, addon_price_paise, version")
+      .select("code, name, description, is_core, is_enabled, sort_order, category, build_status, addon_price_paise, version, show_in_parent_app, show_in_teacher_app, offline_mode")
       .order("sort_order")
   ) as ModuleRow[];
 }

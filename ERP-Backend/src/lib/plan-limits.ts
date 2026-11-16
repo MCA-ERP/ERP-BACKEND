@@ -1,6 +1,7 @@
 import { supabaseAdmin } from "../../db/client";
 import { check } from "./db";
 import { HttpError } from "./http-error";
+import { getSetting } from "../modules/admin/settings.service";
 
 interface Limits {
   student_limit: number | null;
@@ -10,6 +11,10 @@ interface Limits {
 }
 
 const NOT_STAFF = ["Student", "Parent"];
+
+/** What happens when a school reaches a limit: refuse (default), allow 10% more, or only warn. */
+export type OveragePolicy = "block" | "grace10" | "warn";
+export const allowedUpTo = (cap: number, policy: OveragePolicy) => (policy === "warn" ? Number.POSITIVE_INFINITY : policy === "grace10" ? Math.floor(cap * 1.1) : cap);
 
 export async function currentLimits(institutionId: string): Promise<Limits | null> {
   const row = check(
@@ -30,10 +35,13 @@ export async function usage(institutionId: string) {
     supabaseAdmin.from("user_profiles").select("id, roles:role_id(name)").eq("institution_id", institutionId).eq("status", "active").limit(5000),
   ]);
   const people = check(staff) as unknown as { roles: { name: string } | null }[];
+  const yearStart = new Date(Date.UTC(new Date().getUTCFullYear(), 0, 1)).toISOString();
+  const sms = await supabaseAdmin.from("message_log").select("*", { count: "exact", head: true }).eq("institution_id", institutionId).eq("channel", "sms").eq("status", "sent").gte("created_at", yearStart);
   return {
     students: students.count ?? 0,
     campuses: campuses.count ?? 0,
     staff: people.filter((p) => !NOT_STAFF.includes(p.roles?.name ?? "")).length,
+    sms_this_year: sms.count ?? 0,
   };
 }
 
@@ -45,7 +53,8 @@ export async function assertRoomFor(institutionId: string, what: "campus" | "sta
   if (cap === null) return;
   const u = await usage(institutionId);
   const used = what === "campus" ? u.campuses : u.staff;
-  if (used >= cap) {
+  const policy = await getSetting<OveragePolicy>("plans.overage_policy", "block");
+  if (used >= allowedUpTo(cap, policy)) {
     throw new HttpError(409, `The ${limits.name} plan allows ${cap} ${what === "campus" ? "campus(es)" : "staff accounts"} and this school already has ${used}. Move the school to a bigger plan first.`);
   }
 }

@@ -71,9 +71,26 @@ export async function setDependencies(code: string, requires: string[]) {
 }
 
 // ═════════════ catalogue details & meta ═════════════
-export async function updateMeta(code: string, patch: { category?: (typeof CATEGORIES)[number]; build_status?: (typeof BUILD_STATUSES)[number]; description?: string }) {
+export async function updateMeta(code: string, patch: { category?: (typeof CATEGORIES)[number]; build_status?: (typeof BUILD_STATUSES)[number]; description?: string; show_in_parent_app?: boolean; show_in_teacher_app?: boolean; offer_as_addon?: boolean; offline_mode?: boolean }) {
   const row = check(await supabaseAdmin.from("modules").update(patch).eq("code", code).select("code").maybeSingle());
   if (!row) throw new HttpError(404, "Module not found.");
+  return getModuleDetails(code);
+}
+
+/** Adds a module to the catalogue. It starts as "not built" and is included from the chosen plan upwards. */
+export async function createModule(input: { name: string; description: string; category: (typeof CATEGORIES)[number]; plan_code?: string | null }) {
+  const base = input.name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 36) || "module";
+  const existing = new Set((check(await supabaseAdmin.from("modules").select("code, name")) as { code: string; name: string }[]).flatMap((m) => [m.code, m.name.toLowerCase()]));
+  if (existing.has(input.name.toLowerCase())) throw new HttpError(409, "A module with that name already exists.");
+  let code = base;
+  for (let n = 2; existing.has(code); n++) code = `${base}_${n}`;
+  const sort = ((check(await supabaseAdmin.from("modules").select("sort_order").order("sort_order", { ascending: false }).limit(1)) as { sort_order: number }[])[0]?.sort_order ?? 0) + 1;
+  check(await supabaseAdmin.from("modules").insert({ code, name: input.name, description: input.description, category: input.category, is_core: false, sort_order: sort, build_status: "planned" }).select("code").single());
+  if (input.plan_code) {
+    const plans = check(await supabaseAdmin.from("plans").select("id, code, sort_order").order("sort_order")) as { id: string; code: string; sort_order: number }[];
+    const from = plans.find((p) => p.code === input.plan_code);
+    if (from) check(await supabaseAdmin.from("plan_modules").insert(plans.filter((p) => p.sort_order >= from.sort_order).map((p) => ({ plan_id: p.id, module_code: code }))).select("plan_id"));
+  }
   return getModuleDetails(code);
 }
 
@@ -87,14 +104,14 @@ export async function getModuleDetails(code: string) {
     supabaseAdmin.from("feature_flags").select("*").eq("module_code", code).order("created_at"),
     supabaseAdmin.from("module_releases").select("*").eq("module_code", code).order("created_at", { ascending: false }),
     supabaseAdmin.from("module_bundles").select("id, name, module_codes").contains("module_codes", [code]),
-    supabaseAdmin.from("platform_school_overview").select("id, name, code, plan_code, status").in("status", LIVE_STATUSES).order("name"),
+    supabaseAdmin.from("platform_school_overview").select("id, name, code, city, plan_code, plan_name, status").in("status", LIVE_STATUSES).order("name"),
     supabaseAdmin.from("institution_modules").select("institution_id, enabled").eq("module_code", code),
   ]);
   const inPlan = new Set((check(planMods) as { plan_id: string }[]).map((p) => p.plan_id));
   const allPlans = check(plans) as { id: string; code: string; name: string }[];
   const planCodes = new Set(allPlans.filter((p) => inPlan.has(p.id)).map((p) => p.code));
   const ov = new Map((check(overrides) as { institution_id: string; enabled: boolean }[]).map((o) => [o.institution_id, o.enabled]));
-  const live = check(schools) as { id: string; name: string; code: string; plan_code: string | null; status: string }[];
+  const live = check(schools) as { id: string; name: string; code: string; city: string | null; plan_code: string | null; plan_name: string | null; status: string }[];
   const withAccess = live.filter((s) => {
     if (!mod.is_enabled) return false;
     if (mod.is_core) return true;
@@ -110,14 +127,21 @@ export async function getModuleDetails(code: string) {
     required_by: dependents,
     flags: check(flags), releases: check(releases), bundles: check(bundles),
     schools: { live: live.length, with_access: withAccess.length, list: withAccess.slice(0, 50).map((s) => ({ id: s.id, name: s.name, code: s.code })) },
+    // every live school: whether the plan includes the module, and whether it is on for that school
+    school_rows: live.map((s) => {
+      const included = !!mod.is_core || (!!s.plan_code && planCodes.has(s.plan_code));
+      const o = ov.get(s.id);
+      return { id: s.id, name: s.name, code: s.code, city: s.city, plan_name: s.plan_name, access: included ? "included" : "addon", enabled: !!mod.is_enabled && (o !== undefined ? o : included) };
+    }),
   };
 }
 
 // ═════════════ settings ═════════════
-export const MODULE_SETTING_KEYS = ["modules.allow_addons", "modules.show_locked"] as const;
+export const MODULE_SETTING_KEYS = ["modules.admins_toggle", "modules.confirm_addon", "modules.hide_unused", "modules.default_for_new"] as const;
+const MODULE_SETTING_DEFAULTS: Record<string, unknown> = { "modules.admins_toggle": true, "modules.confirm_addon": true, "modules.hide_unused": false, "modules.default_for_new": "off" };
 export async function getModuleSettings() {
   const all = await getSettings();
-  return { settings: Object.fromEntries(MODULE_SETTING_KEYS.map((k) => [k, all[k] ?? true])) };
+  return { settings: Object.fromEntries(MODULE_SETTING_KEYS.map((k) => [k, all[k] ?? MODULE_SETTING_DEFAULTS[k]])) };
 }
 export async function updateModuleSettings(values: Record<string, unknown>, profileId?: string) {
   const bad = Object.keys(values).filter((k) => !(MODULE_SETTING_KEYS as readonly string[]).includes(k));

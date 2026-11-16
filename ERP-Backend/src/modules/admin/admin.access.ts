@@ -13,6 +13,8 @@ const AREA: Record<string, string> = {
   subscriptions: "subscriptions",
   schools: "schools",
   campuses: "schools",
+  "school-admins": "schools",
+  "school-documents": "schools",
   applications: "schools",
   modules: "modules",
   "plan-modules": "modules",
@@ -57,7 +59,7 @@ export function requiredPermission(method: string, path: string): string | null 
     else if (parts[2] === "plan") {
       area = "subscriptions";
       act = "edit";
-    } else if (["status", "status-action", "approve", "primary-admin"].includes(parts[2])) act = "edit";
+    } else if (["status", "status-action", "approve", "reject", "primary-admin"].includes(parts[2])) act = "edit";
     else if (parts[2] === "documents" && parts[4] === "review") act = "edit";
   }
   if (parts[0] === "assist") act = "view"; // asking a question changes nothing
