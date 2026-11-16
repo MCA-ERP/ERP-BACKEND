@@ -15,7 +15,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 const addDays = (iso: string, n: number) => new Date(new Date(iso + "T00:00:00Z").getTime() + n * 86_400_000).toISOString().slice(0, 10);
 
 // ═════════════ plans ═════════════
-const PLAN_SELECT = "id, code, name, description, price_per_student_paise, student_limit, staff_limit, campus_limit, storage_gb, trial_days, sort_order, is_active";
+const PLAN_SELECT = "id, code, name, description, price_per_student_paise, student_limit, staff_limit, campus_limit, storage_gb, trial_days, sort_order, is_active, admin_limit, max_file_mb, video_storage_gb, extra_storage_paise, sms_per_year, support, show_on_pricing, allow_instalments";
 
 export async function listPlansFull() {
   const [plans, subs, mods] = await Promise.all([
@@ -43,6 +43,14 @@ export const planFields = z.object({
   storage_gb: z.number().int().min(1).nullable(),
   trial_days: z.number().int().min(0).max(90).nullable(),
   sort_order: z.number().int().min(0).max(1000),
+  admin_limit: z.number().int().min(1).nullable().optional(),
+  max_file_mb: z.number().int().min(1).nullable().optional(),
+  video_storage_gb: z.number().int().min(1).nullable().optional(),
+  extra_storage_paise: z.number().int().min(0).nullable().optional(),
+  sms_per_year: z.number().int().min(0).nullable().optional(),
+  support: z.string().trim().max(100).nullable().optional().transform((v) => v || null),
+  show_on_pricing: z.boolean().optional(),
+  allow_instalments: z.boolean().optional(),
 });
 
 export async function createPlan(input: z.infer<typeof planFields> & { code: string }, actor: Actor) {
@@ -98,7 +106,29 @@ export async function listSubscriptions(query: Record<string, unknown>) {
   if (typeof query.plan === "string" && /^[a-z0-9_-]{1,30}$/.test(query.plan)) q = q.eq("plan_code", query.plan);
   if (search) q = q.or(`name.ilike.%${search}%,code.ilike.%${search}%`);
   const res = await q;
-  return { items: check(res), total: res.count ?? 0, page: p.page, pageSize: p.pageSize, cancelled: cancelledIds.length };
+  const items = check(res) as { id: string; arr_paise: number }[];
+
+  // when and why each cancelled school left, and the figures for the tiles
+  let reasons = new Map<string, { cancelled_at: string; cancel_reason: string | null }>();
+  let summary: Record<string, unknown> = {};
+  if (group === "cancelled") {
+    const rows = check(
+      await supabaseAdmin.from("subscriptions").select("institution_id, cancelled_at, cancel_reason").eq("is_current", true).not("cancelled_at", "is", null).limit(5000)
+    ) as { institution_id: string; cancelled_at: string; cancel_reason: string | null }[];
+    reasons = new Map(rows.map((r) => [r.institution_id, { cancelled_at: r.cancelled_at, cancel_reason: r.cancel_reason }]));
+    const now = new Date();
+    const fyStart = new Date(Date.UTC(now.getUTCMonth() >= 3 ? now.getUTCFullYear() : now.getUTCFullYear() - 1, 3, 1)).toISOString();
+    const thisYear = rows.filter((r) => r.cancelled_at >= fyStart);
+    const counts = new Map<string, number>();
+    for (const r of rows) { const k = (r.cancel_reason ?? "").replace(/^Cancelled: ?/, "").trim(); if (k) counts.set(k, (counts.get(k) ?? 0) + 1); }
+    const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+    const lost = check(await supabaseAdmin.from("platform_school_overview").select("arr_paise").in("id", rows.map((r) => r.institution_id)).limit(5000)) as { arr_paise: number }[];
+    summary = { cancelled_this_year: thisYear.length, annual_value_lost_paise: lost.reduce((a, r) => a + r.arr_paise, 0), top_reason: top?.[0] ?? null, fy_start: fyStart.slice(0, 10) };
+  }
+  return {
+    items: items.map((i) => ({ ...i, ...(reasons.get(i.id) ?? {}) })),
+    total: res.count ?? 0, page: p.page, pageSize: p.pageSize, cancelled: cancelledIds.length, summary,
+  };
 }
 
 export async function getSchoolSubscription(id: string) {

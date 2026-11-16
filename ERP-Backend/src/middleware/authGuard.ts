@@ -80,7 +80,7 @@ export async function authGuard(req: Request, res: Response, next: NextFunction)
 
     const { data: profile } = await supabaseAdmin
       .from("user_profiles")
-      .select("id, status, must_change_password, role_id, institution_id, campus_id, first_name, last_name, roles:role_id(name, display_name, data_scope)")
+      .select("id, status, must_change_password, role_id, institution_id, campus_id, first_name, last_name, admin_access, roles:role_id(name, display_name, data_scope)")
       .eq("auth_user_id", authUserId)
       .maybeSingle();
 
@@ -149,7 +149,7 @@ export async function authGuard(req: Request, res: Response, next: NextFunction)
       roleDisplayName: roleData.display_name || roleData.name,
       institutionId: profile.institution_id,
       campusId: profile.campus_id,
-      permissions: await getRolePermissions(profile.role_id),
+      permissions: limitAdminPermissions(await getRolePermissions(profile.role_id), roleData.name, (profile as { admin_access?: Record<string, boolean> }).admin_access),
       modules,
       mustChangePassword: profile.must_change_password === true,
     };
@@ -159,4 +159,19 @@ export async function authGuard(req: Request, res: Response, next: NextFunction)
     console.error("Auth verification failed:", err);
     res.status(500).json({ error: "Authentication verification failed" });
   }
+}
+
+/** Which permissions each area of a school administrator's access switches off. */
+export const ACCESS_PERMISSIONS: Record<string, string[]> = {
+  users: ["admin.users.manage"],
+  fees: ["finance.fees.manage", "finance.payment.collect"],
+  settings: ["admin.settings.manage"],
+  reports: ["finance.reports.view"],
+};
+
+/** A school administrator that was switched off for an area loses that area's permissions. Everyone else is unchanged. */
+export function limitAdminPermissions(permissions: string[], role: string | undefined, access: Record<string, boolean> | null | undefined): string[] {
+  if (role !== "InstitutionAdmin" || !access) return permissions;
+  const off = new Set(Object.entries(ACCESS_PERMISSIONS).filter(([area]) => access[area] === false).flatMap(([, codes]) => codes));
+  return off.size ? permissions.filter((p) => !off.has(p)) : permissions;
 }
