@@ -44,7 +44,7 @@ subscriptionsRouter.post(
 );
 subscriptionsRouter.post(
   "/subscriptions/schools/:id/change-plan",
-  h(async (req, res) => res.json(await subs.changePlanChecked(id(req), z.object({ plan_code: z.string().trim().min(1) }).parse(req.body).plan_code, await actorName(req))))
+  h(async (req, res) => { const b = z.object({ plan_code: z.string().trim().min(1), reason: z.string().trim().max(300).optional() }).parse(req.body); res.json(await subs.changePlanChecked(id(req), b.plan_code, await actorName(req), b.reason)); })
 );
 
 // ── renewals ──

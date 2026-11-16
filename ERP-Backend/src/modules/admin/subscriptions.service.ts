@@ -259,14 +259,14 @@ async function releaseCoupon(couponId: string) {
 }
 
 // ═════════════ plan changes & requests ═════════════
-export async function changePlanChecked(id: string, planCode: string, actor: Actor) {
+export async function changePlanChecked(id: string, planCode: string, actor: Actor, reason?: string) {
   const plan = check(await supabaseAdmin.from("plans").select("id, name, is_active, student_limit, staff_limit, campus_limit").eq("code", planCode).maybeSingle()) as
     | { id: string; name: string; is_active: boolean; student_limit: number | null; staff_limit: number | null; campus_limit: number | null } | null;
   if (!plan) throw new HttpError(400, `Unknown plan '${planCode}'.`);
   if (!plan.is_active) throw new HttpError(400, `The ${plan.name} plan is no longer offered.`);
   await assertFitsPlan(id, plan);
   const result = await changeSchoolPlan(id, planCode, actor.profileId);
-  await logEvent(id, "plan_changed", `Plan changed to ${plan.name}`, actor);
+  await logEvent(id, "plan_changed", `Plan changed to ${plan.name}${reason?.trim() ? `: ${reason.trim()}` : ""}`, actor);
   return result;
 }
 
@@ -302,13 +302,21 @@ export async function listRequests(query: Record<string, unknown>) {
   const p = parsePage(query);
   let q = supabaseAdmin
     .from("subscription_requests")
-    .select("id, kind, status, note, decision_note, created_at, decided_at, institution_id, institutions:institution_id(name, code), to_plan:to_plan_id(code, name), from_plan:from_plan_id(name)", { count: "exact" })
+    .select("id, kind, status, note, decision_note, created_at, decided_at, institution_id, institutions:institution_id(name, code), to_plan:to_plan_id(code, name, price_per_student_paise), from_plan:from_plan_id(name, price_per_student_paise)", { count: "exact" })
     .order("created_at", { ascending: false })
     .range(p.from, p.to);
   if (query.kind === "upgrade" || query.kind === "downgrade") q = q.eq("kind", String(query.kind));
   if (["pending", "approved", "rejected"].includes(String(query.status))) q = q.eq("status", String(query.status));
   const res = await q;
-  return { items: check(res), total: res.count ?? 0, page: p.page, pageSize: p.pageSize };
+  const items = check(res) as unknown as { institution_id: string; to_plan: { price_per_student_paise: number } | null; from_plan: { price_per_student_paise: number } | null }[];
+  // what the move changes in a year: the price difference times the school's students
+  const ids = [...new Set(items.map((i) => i.institution_id))];
+  const sizes = ids.length ? (check(await supabaseAdmin.from("platform_school_overview").select("id, students").in("id", ids)) as { id: string; students: number }[]) : [];
+  const students = new Map(sizes.map((s) => [s.id, s.students]));
+  return {
+    items: items.map((i) => ({ ...i, students: students.get(i.institution_id) ?? 0, change_paise: ((i.to_plan?.price_per_student_paise ?? 0) - (i.from_plan?.price_per_student_paise ?? 0)) * (students.get(i.institution_id) ?? 0) })),
+    total: res.count ?? 0, page: p.page, pageSize: p.pageSize,
+  };
 }
 
 export async function decideRequest(id: string, approve: boolean, note: string | undefined, actor: Actor) {
@@ -337,6 +345,8 @@ export async function extendTrial(id: string, days: number, actor: Actor) {
   const s = check(await supabaseAdmin.from("institutions").select("status").eq("id", id).is("deleted_at", null).maybeSingle()) as { status: string } | null;
   if (!s) throw new HttpError(404, "School not found.");
   if (s.status !== "Trial") throw new HttpError(409, "Only a school on trial can have its trial extended.");
+  const most = await getSetting<number>("trial.max_extension_days", 7);
+  if (days > most) throw new HttpError(409, `A trial can be extended by at most ${most} day(s) at a time. Change this under Trial period.`);
   const sub = check(await supabaseAdmin.from("subscriptions").select("id, trial_ends_on").eq("institution_id", id).eq("is_current", true).maybeSingle()) as { id: string; trial_ends_on: string | null } | null;
   if (!sub) throw new HttpError(404, "This school has no current subscription.");
   const base = sub.trial_ends_on && sub.trial_ends_on > today() ? sub.trial_ends_on : today();
@@ -443,7 +453,10 @@ export async function endSpecialPricing(id: string, actor: Actor) {
 }
 
 // ═════════════ billing settings ═════════════
-export const BILLING_KEYS = ["general.trial_days", "billing.grace_days", "billing.default_cycle", "billing.payment_terms_days", "billing.gst_rate_percent", "general.gst_number", "billing.invoice_footer"] as const;
+export const BILLING_KEYS = ["general.trial_days", "billing.grace_days", "billing.default_cycle", "billing.payment_terms_days", "billing.gst_rate_percent", "general.gst_number", "billing.invoice_footer",
+  "billing.cycles_enabled", "billing.renewal_invoice_days", "billing.billed_by", "billing.bank_details", "billing.email_invoices", "billing.attach_pdf", "billing.include_gstin",
+  "billing.prices_include_gst", "billing.split_gst", "billing.allow_tds", "billing.round_tax", "billing.supplier_state", "billing.sac_code",
+  "trial.runs_on", "trial.student_limit", "trial.max_extension_days", "trial.require_payment_details", "trial.auto_convert", "trial.reminder_emails"] as const;
 
 export async function getBillingSettings() {
   const all = await getSettings();
