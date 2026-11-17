@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { z, ZodError } from "zod";
 import { authGuard } from "../../middleware/authGuard";
+import { sendEmail } from "../../lib/mailer";
 import * as svc from "./admin.service";
 import * as schools from "./schools.service";
 import * as modules from "./modules.service";
@@ -103,6 +104,8 @@ const userCreate = z.object({
   role: z.string().trim().min(1),
   institution_id: z.string().uuid().optional().nullable(),
   campus_id: z.string().uuid().optional().nullable(),
+  must_change_password: z.boolean().optional(),
+  send_details: z.boolean().optional(),
 });
 
 const userPatch = z
@@ -411,7 +414,20 @@ adminRouter.put(
 adminRouter.get("/users", h(async (req, res) => res.json(await svc.listUsers(req.query))));
 adminRouter.post(
   "/users",
-  h(async (req, res) => res.status(201).json({ user: await svc.createUser(userCreate.parse(req.body), req.user?.role) }))
+  h(async (req, res) => {
+    const { send_details, ...input } = userCreate.parse(req.body);
+    const user = await svc.createUser(input, req.user?.role);
+    // the sign-in details go out by email when asked, and when an email service is set up; the password is also shown to the administrator once
+    let emailed = false;
+    let email_error: string | null = null;
+    if (send_details) {
+      try {
+        await sendEmail({ to: input.email, subject: "Your My Class Assist sign-in", text: `Hello ${input.first_name},\n\nYour account is ready.\nSign in with: ${input.email}\nTemporary password: ${input.password}\n\nYou will be asked to choose your own password when you sign in.` });
+        emailed = true;
+      } catch (e) { email_error = e instanceof Error ? e.message : "The email could not be sent."; }
+    }
+    res.status(201).json({ user, emailed, email_error });
+  })
 );
 adminRouter.patch(
   "/users/:id",

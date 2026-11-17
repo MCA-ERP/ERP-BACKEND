@@ -63,7 +63,15 @@ export async function listDirectory(query: Record<string, unknown>) {
   if (search) q = q.or(`email.ilike.%${search}%,first_name.ilike.%${search}%,last_name.ilike.%${search}%,phone.ilike.%${search}%`);
 
   const res = await q;
-  return { items: check(res), total: res.count ?? 0, page: p.page, pageSize: p.pageSize };
+  let items = check(res) as unknown as { id: string }[];
+  if (group === "teachers" && items.length) {
+    // the classes each teacher is class teacher of
+    const secs = check(await supabaseAdmin.from("sections").select("name, class_teacher_id, grades:grade_id(name)").in("class_teacher_id", items.map((i) => i.id))) as unknown as { name: string; class_teacher_id: string; grades: { name: string } | null }[];
+    const by = new Map<string, string[]>();
+    for (const s of secs) by.set(s.class_teacher_id, [...(by.get(s.class_teacher_id) ?? []), `${(s.grades?.name ?? "").replace(/^Grade\s+/i, "")}${s.name}`]);
+    items = items.map((i) => ({ ...i, classes: (by.get(i.id) ?? []).join(", ") || null }));
+  }
+  return { items, total: res.count ?? 0, page: p.page, pageSize: p.pageSize };
 }
 
 /** How many accounts are in each group and each state, for the tabs. */
@@ -113,7 +121,9 @@ async function log(row: { institution_id: string | null; first_name: string; las
   if (row.institution_id) await logEvent(row.institution_id, type, `${summary} (${row.first_name} ${row.last_name})`, actor);
 }
 
-export async function resetPassword(id: string, input: { mode: "temporary" | "link"; password?: string }, actor: Actor, actorRole?: string) {
+export async function resetPassword(id: string, input: { mode: "temporary" | "link"; password?: string; end_sessions?: boolean; unlock?: boolean }, actor: Actor, actorRole?: string) {
+  const endAll = input.end_sessions !== false;
+  const unlock = input.unlock !== false;
   const row = await target(id);
   guardSuper(row, actorRole);
   if (!row.auth_user_id) throw new HttpError(409, "This account has no sign-in to reset.");
@@ -124,6 +134,8 @@ export async function resetPassword(id: string, input: { mode: "temporary" | "li
     }
     const { error } = await supabasePublic.auth.resetPasswordForEmail(row.email, { redirectTo: `${process.env.APP_URL ?? ""}/change-password` });
     if (error) throw new HttpError(502, `The reset email could not be sent: ${error.message}`);
+    if (unlock) check(await supabaseAdmin.from("user_profiles").update({ failed_login_count: 0, locked_until: null }).eq("id", id).select("id"));
+    if (endAll) await endSessions({ profileId: id }, actor.profileId);
     await log(row, "password_reset_link", "Password reset link sent", actor);
     return { mode: "link" as const, sent_to: row.email };
   }
@@ -133,8 +145,8 @@ export async function resetPassword(id: string, input: { mode: "temporary" | "li
   await checkPassword(password, [row.email, row.email.split("@")[0]]);
   const { error } = await supabaseAdmin.auth.admin.updateUserById(row.auth_user_id, { password });
   if (error) throw new HttpError(502, error.message);
-  check(await supabaseAdmin.from("user_profiles").update({ must_change_password: true, failed_login_count: 0, locked_until: null }).eq("id", id).select("id"));
-  await endSessions({ profileId: id }, actor.profileId);
+  check(await supabaseAdmin.from("user_profiles").update(unlock ? { must_change_password: true, failed_login_count: 0, locked_until: null } : { must_change_password: true }).eq("id", id).select("id"));
+  if (endAll) await endSessions({ profileId: id }, actor.profileId);
   await log(row, "password_reset", "Temporary password set", actor);
   // shown once to the administrator; never stored
   return { mode: "temporary" as const, temporary_password: password };
@@ -193,7 +205,7 @@ export async function lockedAccounts() {
   );
 }
 
-export async function activeSessions(query: Record<string, unknown>) {
+export async function activeSessions(query: Record<string, unknown>, currentSessionId?: string | null) {
   const p = parsePage(query);
   const timeout = await getSetting<number>("security.session_timeout_minutes", 480);
   const fresh = new Date(Date.now() - timeout * 60_000).toISOString();
@@ -205,13 +217,21 @@ export async function activeSessions(query: Record<string, unknown>) {
     .order("last_seen_at", { ascending: false })
     .range(p.from, p.to);
   const res = await q;
-  return { items: check(res), total: res.count ?? 0, page: p.page, pageSize: p.pageSize, timeout_minutes: timeout };
+  const items = (check(res) as unknown as { session_id: string }[]).map((s) => ({ ...s, is_current: !!currentSessionId && s.session_id === currentSessionId }));
+  return { items, total: res.count ?? 0, page: p.page, pageSize: p.pageSize, timeout_minutes: timeout };
 }
 
 export async function endSession(sessionId: string, actor: Actor) {
   const n = await endSessions({ sessionId }, actor.profileId);
   if (!n) throw new HttpError(404, "That session is already over.");
   return { ended: n };
+}
+/** Ends every open session except the one the administrator is using. */
+export async function endAllOtherSessions(currentSessionId: string | null, actor: Actor) {
+  let q = supabaseAdmin.from("user_sessions").update({ revoked_at: new Date().toISOString(), revoked_by: actor.profileId ?? null }).is("revoked_at", null);
+  if (currentSessionId) q = q.neq("session_id", currentSessionId);
+  const { data } = await q.select("session_id");
+  return { ended: data?.length ?? 0 };
 }
 export async function endAllSessions(profileId: string, actor: Actor) {
   return { ended: await endSessions({ profileId }, actor.profileId) };
@@ -222,7 +242,7 @@ export async function listStudentAccounts(query: Record<string, unknown>) {
   const p = parsePage(query);
   let q = supabaseAdmin
     .from("students")
-    .select("id, registration_no, first_name, last_name, status, institution_id, user_profile_id, institutions:institution_id(name, code), user_profiles:user_profile_id(status, last_login_at, locked_until)", { count: "exact" })
+    .select("id, registration_no, first_name, last_name, status, institution_id, user_profile_id, institutions:institution_id(name, code), user_profiles:user_profile_id(email, status, last_login_at, locked_until), student_enrollments(enrolled_on, grades:grade_id(name), sections:section_id(name))", { count: "exact" })
     .is("deleted_at", null)
     .order("registration_no")
     .range(p.from, p.to);
@@ -233,7 +253,12 @@ export async function listStudentAccounts(query: Record<string, unknown>) {
   if (search) q = q.or(`registration_no.ilike.%${search}%,first_name.ilike.%${search}%,last_name.ilike.%${search}%`);
   const res = await q;
   const domain = await getSetting<string>("accounts.student_login_domain", "students.myclassassist.in");
-  return { items: check(res), total: res.count ?? 0, page: p.page, pageSize: p.pageSize, login_domain: domain };
+  const [all, withLogin, never] = await Promise.all([
+    supabaseAdmin.from("students").select("*", { count: "exact", head: true }).is("deleted_at", null),
+    supabaseAdmin.from("students").select("*", { count: "exact", head: true }).is("deleted_at", null).not("user_profile_id", "is", null),
+    supabaseAdmin.from("user_profiles").select("*", { count: "exact", head: true }).is("last_login_at", null).in("role_id", await roleIds(["Student"])),
+  ]);
+  return { items: check(res), total: res.count ?? 0, page: p.page, pageSize: p.pageSize, login_domain: domain, stats: { students: all.count ?? 0, with_login: withLogin.count ?? 0, never_signed_in: never.count ?? 0 } };
 }
 
 export interface Credential { student_id?: string; guardian_id?: string; name: string; login_id: string; temporary_password: string }
@@ -283,7 +308,11 @@ export async function listParentAccounts(query: Record<string, unknown>) {
   const search = safeSearch(query.search);
   if (search) q = q.or(`full_name.ilike.%${search}%,phone.ilike.%${search}%`);
   const res = await q;
-  return { items: check(res), total: res.count ?? 0, page: p.page, pageSize: p.pageSize };
+  const [all, withLogin] = await Promise.all([
+    supabaseAdmin.from("guardians").select("*", { count: "exact", head: true }),
+    supabaseAdmin.from("guardians").select("*", { count: "exact", head: true }).not("user_profile_id", "is", null),
+  ]);
+  return { items: check(res), total: res.count ?? 0, page: p.page, pageSize: p.pageSize, stats: { parents: all.count ?? 0, with_login: withLogin.count ?? 0 } };
 }
 
 export async function createParentAccount(guardianId: string, actor: Actor, actorRole?: string): Promise<Credential> {

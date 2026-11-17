@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import { z } from "zod";
 import { actorName } from "../../lib/actor";
 import * as r from "./roles-mgmt.service";
+import { PAGES } from "../../lib/role-pages";
 
 /** Custom roles, module and page access, assignment and the change history. Access is enforced by adminAccess. */
 export const rolesRouter = Router();
@@ -10,7 +11,9 @@ type Handler = (req: Request, res: Response) => Promise<unknown>;
 const h = (fn: Handler) => (req: Request, res: Response, next: NextFunction) => fn(req, res).catch(next);
 const uuid = (req: Request, name = "id") => z.string().uuid("Invalid id.").parse(req.params[name]);
 
-rolesRouter.get("/role-config/roles", h(async (_req, res) => res.json({ roles: await r.listRoles() })));
+rolesRouter.get("/role-config/approval-flows", h(async (_req, res) => res.json({ flows: await r.listApprovalFlows() })));
+rolesRouter.put("/role-config/approval-flows/:key", h(async (req, res) => res.json({ flow: await r.saveApprovalFlow(z.string().regex(/^[a-z]{2,20}$/).parse(req.params.key), r.approvalSchema.parse(req.body), await actorName(req)) })));
+rolesRouter.get("/role-config/roles", h(async (_req, res) => res.json({ roles: await r.listRoles(), menus_total: PAGES.length })));
 rolesRouter.post("/role-config/roles", h(async (req, res) => res.status(201).json({ role: await r.createRole(r.roleSchema.parse(req.body), await actorName(req)) })));
 rolesRouter.patch(
   "/role-config/roles/:id",

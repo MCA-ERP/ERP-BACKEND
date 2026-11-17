@@ -1,6 +1,8 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { z } from "zod";
 import * as reports from "../reports/reports.service";
+import * as rp from "../reports/report-pages.service";
+import * as rp2 from "../reports/report-pages2.service";
 import * as integrations from "../integrations/integrations.service";
 import * as status from "../integrations/service-status";
 
@@ -18,6 +20,12 @@ const uuid = (req: Request, name = "id") => z.string().uuid("Invalid id.").parse
 // ── reports ─────────────────────────────────────────────────
 insightsRouter.get("/reports", h(async (_req, res) => res.json(reports.listReports())));
 insightsRouter.get("/reports/overview", h(async (_req, res) => res.json(await reports.getOverview())));
+insightsRouter.get("/reports/pages/:name", h(async (req, res) => {
+  const n = String(req.params.name);
+  const fn = { "school-growth": rp.schoolGrowth, "school-activity": rp.schoolActivity, "user-growth": rp.userGrowth, "user-engagement": rp.userEngagement, "financial-revenue": rp.financialRevenue, "financial-collection": rp.financialCollection, "financial-outstanding": rp2.financialOutstanding, "subs-distribution": rp2.subscriptionDistribution, "subs-renewals": rp2.subscriptionRenewals, "subs-churn": rp2.subscriptionChurn, "modules-usage": rp2.moduleUsage, "security-login": rp2.securityLogin, "security-access": rp2.securityAccess, "security-audit": rp2.securityAudit }[n];
+  if (!fn) { res.status(404).json({ error: "Unknown report." }); return; }
+  res.json(await fn());
+}));
 insightsRouter.get("/reports/:key", h(async (req, res) => res.json(await reports.runReport(String(req.params.key), req.query))));
 insightsRouter.get(
   "/reports/:key/export",

@@ -4,6 +4,7 @@ import { sendError } from "../../lib/http-error";
 import * as billing from "./billing.service";
 import * as pm from "./payments-mgmt.service";
 import { actorName } from "../../lib/actor";
+import { emailInvoice } from "./invoice-mail";
 
 /** Platform-side billing, mounted under /api/v1/admin (access is enforced by adminAccess: area "payments"). */
 export const billingRouter = Router();
@@ -83,6 +84,10 @@ billingRouter.post(
   h(async (req, res) => res.status(201).json(await billing.createInvoice(invoiceSchema.parse(req.body), req.user?.profileId)))
 );
 billingRouter.get("/payments/invoices/:id", h(async (req, res) => res.json(await billing.getInvoice(uuid(req)))));
+billingRouter.post(
+  "/payments/invoices/:id/email",
+  h(async (req, res) => res.json(await emailInvoice(uuid(req), z.object({ reminder: z.boolean().optional() }).parse(req.body ?? {}).reminder === true, await actorName(req))))
+);
 billingRouter.post(
   "/payments/invoices/:id/void",
   h(async (req, res) => {
