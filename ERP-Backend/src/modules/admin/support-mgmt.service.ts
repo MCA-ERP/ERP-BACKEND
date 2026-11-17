@@ -331,3 +331,21 @@ export async function decorateSla<T extends { priority: string; status: string; 
 export async function ticketEscalations(ticketId: string) {
   return check(await supabaseAdmin.from("ticket_escalations").select("id, reason, from_priority, to_priority, note, escalator_name, created_at").eq("ticket_id", ticketId).order("created_at", { ascending: false }));
 }
+
+// ═════════════ ticket figures ═════════════
+/** The figures above the ticket list: median first reply over the last 7 days, and how many were resolved this month within their time. */
+export async function ticketStats(now = new Date()) {
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+  const weekAgo = new Date(now.getTime() - 7 * 86_400_000).toISOString();
+  const [recent, resolved, policies] = await Promise.all([
+    supabaseAdmin.from("support_tickets").select("created_at, first_response_at").gte("created_at", weekAgo).not("first_response_at", "is", null).limit(5000),
+    supabaseAdmin.from("support_tickets").select("created_at, priority, resolved_at").gte("resolved_at", monthStart).limit(5000),
+    supabaseAdmin.from("sla_policies").select("priority, resolution_hours"),
+  ]);
+  const waits = (check(recent) as { created_at: string; first_response_at: string }[]).map((t) => new Date(t.first_response_at).getTime() - new Date(t.created_at).getTime()).filter((n) => n >= 0).sort((a, b) => a - b);
+  const median_minutes = waits.length ? Math.round(waits[Math.floor(waits.length / 2)] / 60_000) : null;
+  const pol = new Map((check(policies) as { priority: string; resolution_hours: number }[]).map((p) => [p.priority, p.resolution_hours]));
+  const done = check(resolved) as { created_at: string; priority: string; resolved_at: string }[];
+  const within = done.filter((t) => { const h = pol.get(t.priority); return h === undefined || new Date(t.resolved_at).getTime() - new Date(t.created_at).getTime() <= h * 3_600_000; }).length;
+  return { median_first_response_minutes: median_minutes, resolved_this_month: done.length, within_sla_percent: done.length ? Math.round((within / done.length) * 100) : null, month: now.toLocaleString("en-US", { month: "long", timeZone: "UTC" }) };
+}

@@ -28,6 +28,15 @@ opsRouter.get("/support/tickets", h(async (req, res) => {
   const r = await support.listTickets(req.query);
   res.json({ ...r, items: await sm.decorateSla(r.items as any[]) });
 }));
+opsRouter.get("/support/stats", h(async (_req, res) => res.json(await sm.ticketStats())));
+opsRouter.post(
+  "/support/tickets",
+  h(async (req, res) => {
+    const b = z.object({ institution_id: z.string().uuid("Choose a school."), subject: z.string().trim().min(3).max(200), category: z.string().trim().min(2).max(60), priority: z.enum(support.PRIORITIES).optional(), body: z.string().trim().min(1, "Describe the issue.").max(5000) }).parse(req.body);
+    const { institution_id, ...input } = b;
+    res.status(201).json(await support.createSchoolTicket(institution_id, await actorName(req), input));
+  })
+);
 opsRouter.get("/support/agents", h(async (_req, res) => res.json({ agents: await support.listAgents() })));
 opsRouter.get("/support/workload", h(async (_req, res) => res.json(await sm.workload())));
 opsRouter.get("/support/tickets/:id", h(async (req, res) => {

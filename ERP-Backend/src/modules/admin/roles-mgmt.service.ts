@@ -59,14 +59,17 @@ const delta = (before: string[], after: string[]) => ({ added: after.filter((x) 
 
 // ═════════════ catalogue ═════════════
 export async function listRoles() {
-  const [roles, users, perms, mods, denials, schools] = await Promise.all([
+  const [roles, users, perms, mods, denials, schools, origins] = await Promise.all([
     supabaseAdmin.from("roles").select(ROLE_COLS).order("created_at"),
     supabaseAdmin.from("user_profiles").select("role_id").limit(50000),
     supabaseAdmin.from("role_permissions").select("role_id"),
     supabaseAdmin.from("role_modules").select("role_id"),
     supabaseAdmin.from("role_page_denials").select("role_id"),
     supabaseAdmin.from("institutions").select("id, name").is("deleted_at", null),
+    supabaseAdmin.from("role_changes").select("role_id, change_type, summary").in("change_type", ["copied", "created"]).order("created_at", { ascending: true }),
   ]);
+  const basedOn = new Map<string, string>();
+  for (const o of check(origins) as { role_id: string | null; change_type: string; summary: string }[]) if (o.role_id) basedOn.set(o.role_id, o.change_type === "copied" ? o.summary.replace(/^Copied from /, "Copied from ") : "Blank");
   const count = (rows: { role_id: string }[]) => { const m = new Map<string, number>(); rows.forEach((r) => m.set(r.role_id, (m.get(r.role_id) ?? 0) + 1)); return m; };
   const u = count(check(users) as { role_id: string }[]);
   const p = count(check(perms) as { role_id: string }[]);
@@ -75,7 +78,7 @@ export async function listRoles() {
   const schoolName = new Map((check(schools) as { id: string; name: string }[]).map((s) => [s.id, s.name]));
   return (check(roles) as RoleRow[]).map((r) => ({
     ...r, user_count: u.get(r.id) ?? 0, permission_count: p.get(r.id) ?? 0, restricted_modules: m.get(r.id) ?? 0, denied_pages: d.get(r.id) ?? 0,
-    school_name: r.institution_id ? schoolName.get(r.institution_id) ?? null : null,
+    school_name: r.institution_id ? schoolName.get(r.institution_id) ?? null : null, based_on: basedOn.get(r.id) ?? null,
   }));
 }
 
@@ -91,6 +94,9 @@ export const roleSchema = z.object({
   institution_id: z.string().uuid().nullable().optional(),
   data_scope: z.enum(["school", "campus"]).optional(),
   copy_from: z.string().uuid().nullable().optional(),
+  copy_permissions: z.boolean().optional(),
+  copy_approvals: z.boolean().optional(),
+  copy_data_scope: z.boolean().optional(),
 });
 
 export async function createRole(input: z.infer<typeof roleSchema>, actor: Actor) {
@@ -100,7 +106,7 @@ export async function createRole(input: z.infer<typeof roleSchema>, actor: Actor
     source = await getRole(input.copy_from);
     if (source.name === "SuperAdmin") throw new HttpError(400, "The Super Administrator role cannot be copied.");
     scope = source.scope;
-    data_scope = data_scope ?? source.data_scope;
+    data_scope = input.copy_data_scope === false ? data_scope : data_scope ?? source.data_scope;
   }
   if (scope === "platform" && input.institution_id) throw new HttpError(400, "A platform role cannot belong to one school.");
   if (input.institution_id) {
@@ -126,13 +132,14 @@ export async function createRole(input: z.infer<typeof roleSchema>, actor: Actor
     }).select(ROLE_COLS).single()
   ) as RoleRow;
 
-  if (source) {
+  if (source && input.copy_permissions !== false) {
     const [perms, mods, pages] = await Promise.all([
-      supabaseAdmin.from("role_permissions").select("permission_id").eq("role_id", source.id),
+      supabaseAdmin.from("role_permissions").select("permission_id, permissions(code)").eq("role_id", source.id),
       supabaseAdmin.from("role_modules").select("module_code").eq("role_id", source.id),
       supabaseAdmin.from("role_page_denials").select("page_key").eq("role_id", source.id),
     ]);
-    const pr = check(perms) as { permission_id: string }[];
+    // approval rights are copied only when asked for
+    const pr = (check(perms) as unknown as { permission_id: string; permissions: { code: string } | null }[]).filter((x) => input.copy_approvals !== false || !x.permissions?.code.startsWith("approvals."));
     const mr = check(mods) as { module_code: string }[];
     const gr = check(pages) as { page_key: string }[];
     if (pr.length) check(await supabaseAdmin.from("role_permissions").insert(pr.map((x) => ({ role_id: created.id, permission_id: x.permission_id }))).select("role_id"));
@@ -236,9 +243,12 @@ export async function getPageAccess() {
 
 export async function setPageAccess(roleId: string, deniedKeys: string[], actor: Actor) {
   const role = await getRole(roleId);
-  if (role.scope !== "platform" || role.name === "SuperAdmin") throw new HttpError(400, "Page access applies to platform roles other than Super Administrator.");
+  if (role.name === "SuperAdmin") throw new HttpError(400, "Super Administrator always has every page.");
+  const schoolKey = /^school(\/[a-z0-9_-]+){3}$/;
+  if (role.scope === "school" && deniedKeys.some((k) => !schoolKey.test(k))) throw new HttpError(400, "School roles take the pages of the school portal.");
   const valid = new Set(PAGES.map((p) => p.key));
-  const bad = deniedKeys.filter((k) => !valid.has(k));
+  // either a page the server enforces, or a page of the portal menu ("module/section/page"), which is recorded
+  const bad = deniedKeys.filter((k) => !valid.has(k) && !/^[a-z0-9_-]+(\/[a-z0-9_-]+){2,3}$/.test(k));
   if (bad.length) throw new HttpError(400, `Unknown page(s): ${bad.join(", ")}`);
   const before = (check(await supabaseAdmin.from("role_page_denials").select("page_key").eq("role_id", roleId)) as { page_key: string }[]).map((r) => r.page_key);
   const after = Array.from(new Set(deniedKeys));
@@ -349,4 +359,36 @@ export async function restore(roleId: string, changeId: string, actor: Actor) {
   }
   await record(role, "restored", `Restored the version from ${new Date(ver.created_at).toISOString().slice(0, 16).replace("T", " ")}`, actor);
   return { success: true, skipped: snap.permissions.length - perms.length };
+}
+
+// ═════════════ approval chains ═════════════
+export interface ApprovalFlow {
+  key: string; label: string; sort_order: number; require_approval: boolean; require_hint: string; escalate_overdue: boolean; allow_delegate: boolean; notify_requester: boolean;
+  levels: { level: number; approver_role: string; when_text: string; within_days: number }[];
+}
+
+export async function listApprovalFlows(): Promise<ApprovalFlow[]> {
+  const [flows, levels] = await Promise.all([
+    supabaseAdmin.from("approval_flows").select("key, label, sort_order, require_approval, require_hint, escalate_overdue, allow_delegate, notify_requester").order("sort_order"),
+    supabaseAdmin.from("approval_levels").select("flow_key, level, approver_role, when_text, within_days").order("level"),
+  ]);
+  const lv = check(levels) as { flow_key: string; level: number; approver_role: string; when_text: string; within_days: number }[];
+  return (check(flows) as Omit<ApprovalFlow, "levels">[]).map((f) => ({ ...f, levels: lv.filter((l) => l.flow_key === f.key).map(({ flow_key: _k, ...rest }) => rest) }));
+}
+
+export const approvalSchema = z.object({
+  require_approval: z.boolean(), escalate_overdue: z.boolean(), allow_delegate: z.boolean(), notify_requester: z.boolean(),
+  levels: z.array(z.object({ level: z.number().int().min(1).max(10), approver_role: z.string().trim().min(2).max(80), within_days: z.number().int().min(1).max(30) })).min(1).max(10),
+});
+
+/** Saves the rules and who approves at each level. The levels themselves and what each level covers are fixed. */
+export async function saveApprovalFlow(key: string, input: z.infer<typeof approvalSchema>, actor: Actor) {
+  const flow = check(await supabaseAdmin.from("approval_flows").select("key, label").eq("key", key).maybeSingle()) as { key: string; label: string } | null;
+  if (!flow) throw new HttpError(404, "Approval chain not found.");
+  const existing = check(await supabaseAdmin.from("approval_levels").select("level").eq("flow_key", key)) as { level: number }[];
+  if (input.levels.length !== existing.length || input.levels.some((l) => !existing.some((e) => e.level === l.level))) throw new HttpError(400, "The levels of this chain cannot be changed here.");
+  check(await supabaseAdmin.from("approval_flows").update({ require_approval: input.require_approval, escalate_overdue: input.escalate_overdue, allow_delegate: input.allow_delegate, notify_requester: input.notify_requester, updated_at: new Date().toISOString() }).eq("key", key).select("key"));
+  for (const l of input.levels) check(await supabaseAdmin.from("approval_levels").update({ approver_role: l.approver_role, within_days: l.within_days }).eq("flow_key", key).eq("level", l.level).select("level"));
+  await record({ id: null, name: flow.label }, "updated", `Approval chain for ${flow.label} changed`, actor);
+  return (await listApprovalFlows()).find((f) => f.key === key);
 }
