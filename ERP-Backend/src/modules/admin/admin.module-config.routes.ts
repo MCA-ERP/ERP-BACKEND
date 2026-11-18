@@ -10,11 +10,15 @@ const h = (fn: Handler) => (req: Request, res: Response, next: NextFunction) => 
 const uuid = (req: Request) => z.string().uuid("Invalid id.").parse(req.params.id);
 const code = (req: Request) => z.string().regex(/^[a-z0-9_]{1,40}$/, "Invalid module.").parse(req.params.code);
 
+moduleConfigRouter.post(
+  "/module-config/modules",
+  h(async (req, res) => res.status(201).json(await cfg.createModule(z.object({ name: z.string().trim().min(2).max(60), description: z.string().trim().min(3).max(500), category: z.enum(cfg.CATEGORIES), plan_code: z.string().trim().max(30).nullable().optional() }).parse(req.body))))
+);
 moduleConfigRouter.get("/module-config/modules/:code", h(async (req, res) => res.json(await cfg.getModuleDetails(code(req)))));
 moduleConfigRouter.patch(
   "/module-config/modules/:code",
   h(async (req, res) => {
-    const patch = z.object({ category: z.enum(cfg.CATEGORIES), build_status: z.enum(cfg.BUILD_STATUSES), description: z.string().trim().min(3).max(500) }).partial().strict().parse(req.body);
+    const patch = z.object({ category: z.enum(cfg.CATEGORIES), build_status: z.enum(cfg.BUILD_STATUSES), description: z.string().trim().min(3).max(500), show_in_parent_app: z.boolean(), show_in_teacher_app: z.boolean(), offer_as_addon: z.boolean(), offline_mode: z.boolean() }).partial().strict().parse(req.body);
     res.json(await cfg.updateMeta(code(req), patch));
   })
 );

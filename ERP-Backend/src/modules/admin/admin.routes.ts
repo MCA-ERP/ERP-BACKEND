@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from "express";
 import { z, ZodError } from "zod";
 import { authGuard } from "../../middleware/authGuard";
+import { sendEmail } from "../../lib/mailer";
 import * as svc from "./admin.service";
 import * as schools from "./schools.service";
 import * as modules from "./modules.service";
@@ -17,6 +18,7 @@ import { moduleConfigRouter } from "./admin.module-config.routes";
 import { usersRouter } from "./admin.users.routes";
 import { rolesRouter } from "./admin.roles.routes";
 import * as topbar from "./topbar.service";
+import * as dash from "./dashboard.service";
 import * as assist from "./assist.service";
 import * as rolesvc from "./roles-mgmt.service";
 import * as subsvc from "./subscriptions.service";
@@ -59,6 +61,12 @@ const schoolBase = z.object({
   address: nullableStr(500),
   website: nullableStr(255),
   gst_number: z.string().trim().toUpperCase().regex(/^[0-9A-Z]{15}$/, "A GSTIN has 15 letters and digits.").optional().nullable().or(z.literal("").transform(() => null)),
+  medium_of_instruction: nullableStr(50),
+  classes_offered: nullableStr(100),
+  student_estimate: z.number().int().min(0).max(200000).optional().nullable(),
+  udise_code: nullableStr(20),
+  affiliation_number: nullableStr(80),
+  established_year: z.number().int().min(1800).max(2100).optional().nullable(),
 });
 
 const schoolCreate = schoolBase.extend({
@@ -80,6 +88,10 @@ const campusExtra = {
   email: z.string().trim().email().nullable().optional().or(z.literal("").transform(() => null)),
   principal_name: nullableStr(150),
   is_main: z.boolean().optional(),
+  classes_offered: nullableStr(100),
+  facilities: z.array(z.string().trim().min(1).max(40)).max(20).optional(),
+  classrooms: z.number().int().min(0).max(5000).nullable().optional(),
+  opened_year: z.number().int().min(1800).max(2100).nullable().optional(),
 };
 
 
@@ -92,6 +104,8 @@ const userCreate = z.object({
   role: z.string().trim().min(1),
   institution_id: z.string().uuid().optional().nullable(),
   campus_id: z.string().uuid().optional().nullable(),
+  must_change_password: z.boolean().optional(),
+  send_details: z.boolean().optional(),
 });
 
 const userPatch = z
@@ -108,6 +122,31 @@ const userPatch = z
 
 // Dashboard & plans
 adminRouter.get("/dashboard/summary", h(async (_req, res) => res.json(await schools.getDashboardSummary())));
+adminRouter.get("/dashboard/overview", h(async (req, res) => res.json(await dash.getOverview(dash.parseRange(req.query)))));
+adminRouter.get("/dashboard/activity", h(async (req, res) => res.json(await dash.getActivity(dash.parseRange(req.query)))));
+adminRouter.get("/dashboard/kpis", h(async (req, res) => res.json(await dash.getKpis(dash.parseRange(req.query)))));
+adminRouter.put(
+  "/dashboard/kpi-targets",
+  h(async (req, res) => {
+    const input = z.record(z.string(), z.number().nullable()).parse(req.body);
+    res.json({ targets: await dash.setKpiTargets(input, req.user?.profileId) });
+  })
+);
+adminRouter.get("/dashboard/alerts", h(async (_req, res) => res.json(await dash.listDashboardAlerts())));
+adminRouter.put(
+  "/dashboard/alerts/state",
+  h(async (req, res) => {
+    const { ids, status } = z.object({ ids: z.array(z.string().max(200)).min(1).max(500), status: z.enum(["acknowledged", "resolved", "new"]) }).parse(req.body);
+    res.json(await dash.setAlertState(ids, status, req.user?.profileId));
+  })
+);
+adminRouter.put(
+  "/dashboard/alerts/acknowledge-all",
+  h(async (req, res) => {
+    const { category } = z.object({ category: z.enum(["subscription", "payment", "security"]).optional() }).parse(req.body ?? {});
+    res.json(await dash.acknowledgeAllNew(category, req.user?.profileId));
+  })
+);
 adminRouter.get("/plans", h(async (req, res) => res.json({ plans: await schools.listPlans(req.query.all === "1") })));
 
 // Schools
@@ -120,6 +159,7 @@ adminRouter.post(
     res.status(201).json(created);
   })
 );
+adminRouter.get("/schools/approval-stats", h(async (_req, res) => res.json(await mgmt.getApprovalStats())));
 adminRouter.get("/schools/:id", h(async (req, res) => res.json(await schools.getSchool(id(req)))));
 adminRouter.patch("/schools/:id", h(async (req, res) => res.json(await schools.updateSchool(id(req), schoolPatch.parse(req.body)))));
 adminRouter.post(
@@ -172,6 +212,13 @@ const profilePatch = z
     tagline: nullableStr(200),
     primary_color: hexColor,
     secondary_color: hexColor,
+    medium_of_instruction: nullableStr(50),
+    classes_offered: nullableStr(100),
+    student_estimate: z.number().int().min(0).max(200000).nullable(),
+    udise_code: nullableStr(20),
+    app_name: nullableStr(100),
+    receipt_header: nullableStr(200),
+    own_branding: z.boolean(),
   })
   .partial()
   .strict();
@@ -188,20 +235,31 @@ adminRouter.delete("/schools/:id/contacts/:contactId", h(async (req, res) => res
 
 const configSchemas = {
   academic: z.object({
+    current_year: z.string().regex(/^\d{4}-\d{2}$/, "Use a year like 2026-27."),
     year_start_month: z.number().int().min(1).max(12),
     terms: z.number().int().min(1).max(4),
-    grading: z.enum(["Marks and percentage", "Grades (A-E)", "CGPA", "Descriptive only"]),
-    attendance_rule: z.enum(["Daily", "Per period"]),
+    grading: z.enum(["Marks and percentage", "Grades (A-E)", "CGPA", "Descriptive only", "CBSE 8-point (A1 - E)", "10-point (CGPA)", "Percentage", "Cambridge (A* - G)", "IB 7-point"]),
+    pass_mark: z.number().int().min(0).max(100),
+    working_days: z.enum(["Monday - Friday", "Monday - Saturday", "Monday - Sunday"]),
+    attendance_rule: z.enum(["Daily", "Per period", "Once a day", "Twice a day"]),
     min_attendance_percent: z.number().int().min(0).max(100),
+    promote_auto: z.boolean(),
+    lock_marks: z.boolean(),
   }).partial().strict(),
   regional: z.object({
     country: z.string().trim().min(2).max(60),
+    state: z.string().trim().max(60),
+    number_format: z.enum(["1,00,000 (Indian)", "100,000 (International)"]),
+    week_start: z.enum(["Monday", "Sunday"]),
     timezone: z.enum(["Asia/Kolkata", "Asia/Dubai", "Asia/Singapore", "Europe/London", "America/New_York", "UTC"]),
     currency: z.enum(["INR", "USD", "AED", "GBP", "SGD"]),
     date_format: z.enum(["DD MMM YYYY", "DD/MM/YYYY", "MM/DD/YYYY", "YYYY-MM-DD"]),
   }).partial().strict(),
   language: z.object({
     default: z.string().trim().min(2).max(40),
+    report_card: z.string().trim().min(2).max(40),
+    comms: z.string().trim().min(2).max(40),
+    parents_choose: z.boolean(),
     enabled: z.array(z.string().trim().min(2).max(40)).min(1).max(12),
   }).partial().strict().refine((v) => !v.default || !v.enabled || v.enabled.includes(v.default), "The default language must be one of the enabled languages."),
 } as const;
@@ -235,6 +293,8 @@ adminRouter.post(
         phone: z.string().trim().max(30).optional(),
         password: z.string().min(8, "Password must be at least 8 characters.").max(72),
         make_primary: z.boolean().optional(),
+        designation: z.string().trim().max(100).optional(),
+        require_2fa: z.boolean().optional(),
       })
       .parse(req.body);
     res.status(201).json({ admin: await mgmt.createAdmin(id(req), input, await actorName(req)) });
@@ -253,6 +313,20 @@ adminRouter.post(
     const { action, reason } = z.object({ action: z.enum(["activate", "deactivate", "suspend", "reactivate"]), reason: z.string().trim().max(500).optional() }).parse(req.body);
     res.json(await mgmt.statusAction(id(req), action, reason, await actorName(req)));
   })
+);
+adminRouter.post(
+  "/schools/:id/reject",
+  h(async (req, res) => res.json(await mgmt.rejectSchool(id(req), z.object({ reason: z.string().trim().min(3, "Say why.").max(500) }).parse(req.body).reason, await actorName(req))))
+);
+adminRouter.get("/school-documents", h(async (req, res) => res.json(await mgmt.listDocumentOverview(z.enum(["registration", "affiliation"]).parse(req.query.category)))));
+adminRouter.post(
+  "/schools/:id/document-requests",
+  h(async (req, res) => res.json(await mgmt.requestDocument(id(req), z.object({ doc_type: z.string().trim().min(2).max(100) }).parse(req.body).doc_type, await actorName(req))))
+);
+adminRouter.get("/school-admins", h(async (req, res) => res.json(await mgmt.listAllAdmins(req.query))));
+adminRouter.put(
+  "/school-admins/:id/access",
+  h(async (req, res) => res.json(await mgmt.setAdminAccess(id(req), z.object({ users: z.boolean(), fees: z.boolean(), settings: z.boolean(), reports: z.boolean(), data_export: z.boolean() }).partial().parse(req.body), await actorName(req))))
 );
 adminRouter.get("/schools/:id/readiness", h(async (req, res) => res.json(await mgmt.getReadiness(id(req)))));
 adminRouter.post(
@@ -296,7 +370,7 @@ adminRouter.post(
 );
 adminRouter.patch(
   "/applications/:id",
-  h(async (req, res) => res.json(await mgmt.updateApplication(id(req), z.object({ status: z.enum(["new", "in_review", "rejected"]), notes: nullableStr(500) }).partial().parse(req.body), await actorName(req))))
+  h(async (req, res) => res.json(await mgmt.updateApplication(id(req), z.object({ status: z.enum(["new", "in_review", "documents_pending", "rejected"]), notes: nullableStr(500) }).partial().parse(req.body), await actorName(req))))
 );
 adminRouter.post(
   "/applications/:id/convert",
@@ -340,7 +414,20 @@ adminRouter.put(
 adminRouter.get("/users", h(async (req, res) => res.json(await svc.listUsers(req.query))));
 adminRouter.post(
   "/users",
-  h(async (req, res) => res.status(201).json({ user: await svc.createUser(userCreate.parse(req.body), req.user?.role) }))
+  h(async (req, res) => {
+    const { send_details, ...input } = userCreate.parse(req.body);
+    const user = await svc.createUser(input, req.user?.role);
+    // the sign-in details go out by email when asked, and when an email service is set up; the password is also shown to the administrator once
+    let emailed = false;
+    let email_error: string | null = null;
+    if (send_details) {
+      try {
+        await sendEmail({ to: input.email, subject: "Your My Class Assist sign-in", text: `Hello ${input.first_name},\n\nYour account is ready.\nSign in with: ${input.email}\nTemporary password: ${input.password}\n\nYou will be asked to choose your own password when you sign in.` });
+        emailed = true;
+      } catch (e) { email_error = e instanceof Error ? e.message : "The email could not be sent."; }
+    }
+    res.status(201).json({ user, emailed, email_error });
+  })
 );
 adminRouter.patch(
   "/users/:id",
@@ -387,7 +474,7 @@ adminRouter.get("/assist/status", h(async (_req, res) => res.json({ configured: 
 adminRouter.post("/assist/chat", h(async (req, res) => {
   const { messages, page } = chatSchema.parse(req.body);
   if (messages[messages.length - 1].role !== "user") return res.status(400).json({ error: "Ask a question first." });
-  return res.json(await assist.chat(messages, page, req.user?.profileId ?? "anonymous"));
+  return res.json(await assist.chat(messages, page, req.user?.profileId ?? "anonymous", { role: req.user?.role, permissions: req.user?.permissions ?? [] }));
 }));
 adminRouter.use(billingRouter);
 adminRouter.use(insightsRouter);

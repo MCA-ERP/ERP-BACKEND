@@ -9,6 +9,8 @@ import * as settings from "./settings.service";
 import * as security from "./security.service";
 import * as secMgmt from "./security-mgmt.service";
 import * as system from "./system.service";
+import { HttpError } from "../../lib/http-error";
+import * as locale from "./locale-mgmt.service";
 import { sessionIdOf } from "../../lib/sessions";
 import * as messaging from "../messaging/messaging.service";
 
@@ -28,6 +30,15 @@ opsRouter.get("/support/tickets", h(async (req, res) => {
   const r = await support.listTickets(req.query);
   res.json({ ...r, items: await sm.decorateSla(r.items as any[]) });
 }));
+opsRouter.get("/support/stats", h(async (_req, res) => res.json(await sm.ticketStats())));
+opsRouter.post(
+  "/support/tickets",
+  h(async (req, res) => {
+    const b = z.object({ institution_id: z.string().uuid("Choose a school."), subject: z.string().trim().min(3).max(200), category: z.string().trim().min(2).max(60), priority: z.enum(support.PRIORITIES).optional(), body: z.string().trim().min(1, "Describe the issue.").max(5000) }).parse(req.body);
+    const { institution_id, ...input } = b;
+    res.status(201).json(await support.createSchoolTicket(institution_id, await actorName(req), input));
+  })
+);
 opsRouter.get("/support/agents", h(async (_req, res) => res.json({ agents: await support.listAgents() })));
 opsRouter.get("/support/workload", h(async (_req, res) => res.json(await sm.workload())));
 opsRouter.get("/support/tickets/:id", h(async (req, res) => {
@@ -257,6 +268,38 @@ opsRouter.post(
 );
 opsRouter.delete("/ip-allowlist/:id", h(async (req, res) => res.json(await security.removeAllowlist(uuid(req), security.clientIp(req)))));
 // system information and release history
+opsRouter.post(
+  "/system/test-email",
+  h(async (req, res) => {
+    const to = req.user?.email;
+    if (!to) throw new HttpError(400, "Your account has no email address to send the test to.");
+    res.json({ to, message: await messaging.sendTest({ channel: "email", to }, req.user?.profileId) });
+  })
+);
+opsRouter.get("/system/states", h(async (_req, res) => res.json({ states: await locale.listStates() })));
+opsRouter.get("/system/languages", h(async (_req, res) => res.json({ languages: await locale.listLanguages() })));
+opsRouter.post(
+  "/system/languages",
+  h(async (req, res) => {
+    const input = z.object({ name: z.string().trim().min(2).max(60), code: z.string().trim().min(2).max(10).regex(/^[a-zA-Z-]+$/, "Use letters only for the code, like \"gu\".") }).parse(req.body);
+    res.status(201).json({ language: await locale.addLanguage(input) });
+  })
+);
+opsRouter.patch(
+  "/system/languages/:code",
+  h(async (req, res) => {
+    const { status } = z.object({ status: z.enum(["active", "draft"]) }).parse(req.body);
+    res.json({ language: await locale.setLanguageStatus(z.string().min(2).max(10).parse(req.params.code), status) });
+  })
+);
+opsRouter.get("/system/translations", h(async (_req, res) => res.json(await locale.listTranslations())));
+opsRouter.put(
+  "/system/translations",
+  h(async (req, res) => {
+    const { values } = z.object({ values: z.record(z.string().max(120), z.record(z.string().max(10), z.string().max(1000))) }).parse(req.body);
+    res.json(await locale.saveTranslations(values));
+  })
+);
 opsRouter.get("/system/info", h(async (_req, res) => res.json(await system.systemInfo())));
 opsRouter.get("/system/releases", h(async (_req, res) => res.json({ releases: await system.listReleases() })));
 opsRouter.post(
@@ -280,6 +323,14 @@ opsRouter.delete("/ip-blocklist/:id", h(async (req, res) => res.json(await secur
 
 // alerts, incidents, devices, data changes, retention
 opsRouter.get("/security/alerts", h(async (_req, res) => res.json({ alerts: await secMgmt.listAlerts() })));
+opsRouter.post(
+  "/security/alerts/status",
+  h(async (req, res) => {
+    const { id, status } = z.object({ id: z.string().min(1).max(200), status: z.enum(["acknowledged", "resolved"]) }).parse(req.body);
+    res.json(await secMgmt.setAlertStatus(id, status, req.user?.profileId));
+  })
+);
+opsRouter.post("/security/mfa/:id/remind", h(async (req, res) => res.json(await secMgmt.remindMfa(uuid(req)))));
 opsRouter.get("/security/incidents", h(async (_req, res) => res.json({ incidents: await secMgmt.listIncidents() })));
 opsRouter.post(
   "/security/incidents",

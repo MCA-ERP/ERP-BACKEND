@@ -7,6 +7,7 @@ interface Cached {
   at: number;
   state: SessionState;
   lastSeen: number;
+  school?: boolean;
 }
 const cache = new Map<string, Cached>();
 const TTL_MS = 10_000;
@@ -30,14 +31,16 @@ export async function checkSession(sessionId: string): Promise<SessionState> {
   const now = Date.now();
   let c = cache.get(sessionId);
   if (!c || now - c.at > TTL_MS) {
-    const { data } = await supabaseAdmin.from("user_sessions").select("revoked_at, last_seen_at").eq("session_id", sessionId).maybeSingle();
-    c = { at: now, state: !data ? "untracked" : data.revoked_at ? "revoked" : "ok", lastSeen: data ? new Date(data.last_seen_at as string).getTime() : now };
+    const { data } = await supabaseAdmin.from("user_sessions").select("revoked_at, last_seen_at, user_profiles:user_profile_id(institution_id)").eq("session_id", sessionId).maybeSingle();
+    const owner = (data as unknown as { user_profiles?: { institution_id: string | null } | null } | null)?.user_profiles;
+    c = { at: now, state: !data ? "untracked" : data.revoked_at ? "revoked" : "ok", lastSeen: data ? new Date(data.last_seen_at as string).getTime() : now, school: !!owner?.institution_id };
     cache.set(sessionId, c);
     if (cache.size > 5000) for (const k of cache.keys()) { cache.delete(k); if (cache.size < 2500) break; }
   }
   if (c.state !== "ok") return c.state;
 
-  const timeoutMin = await getSetting<number>("security.session_timeout_minutes", 480);
+  const portalMin = await getSetting<number>("security.session_timeout_minutes", 480);
+  const timeoutMin = c.school ? await getSetting<number>("security.session_timeout_school_minutes", portalMin) : portalMin;
   if (now - c.lastSeen > timeoutMin * 60_000) return "idle";
 
   if (now - c.lastSeen > TOUCH_EVERY_MS) {

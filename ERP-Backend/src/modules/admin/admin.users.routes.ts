@@ -2,6 +2,7 @@ import { Router, Request, Response, NextFunction } from "express";
 import { z } from "zod";
 import { actorName } from "../../lib/actor";
 import * as u from "./users-mgmt.service";
+import { sessionIdOf } from "../../lib/sessions";
 
 /** The user directory, account actions, login activity, and student and parent accounts. */
 export const usersRouter = Router();
@@ -16,7 +17,7 @@ usersRouter.get("/user-directory/counts", h(async (_req, res) => res.json(await 
 usersRouter.post(
   "/user-directory/:id/reset-password",
   h(async (req, res) => {
-    const b = z.object({ mode: z.enum(["temporary", "link"]), password: z.string().min(8).max(72).optional() }).parse(req.body);
+    const b = z.object({ mode: z.enum(["temporary", "link"]), password: z.string().min(8).max(72).optional(), end_sessions: z.boolean().optional(), unlock: z.boolean().optional() }).parse(req.body);
     res.json(await u.resetPassword(uuid(req), b, await actorName(req), req.user?.role));
   })
 );
@@ -31,7 +32,8 @@ usersRouter.post("/user-directory/:id/end-sessions", h(async (req, res) => res.j
 
 usersRouter.get("/login-activity/history", h(async (req, res) => res.json(await u.loginHistory(req.query, true))));
 usersRouter.get("/login-activity/failed", h(async (req, res) => res.json({ ...(await u.loginHistory(req.query, false)), locked: await u.lockedAccounts() })));
-usersRouter.get("/login-activity/sessions", h(async (req, res) => res.json(await u.activeSessions(req.query))));
+usersRouter.get("/login-activity/sessions", h(async (req, res) => res.json(await u.activeSessions(req.query, sessionIdOf((req.headers.authorization ?? "").replace(/^Bearer\s+/i, ""))))));
+usersRouter.post("/login-activity/sessions/end-others", h(async (req, res) => res.json(await u.endAllOtherSessions(sessionIdOf((req.headers.authorization ?? "").replace(/^Bearer\s+/i, "")), await actorName(req)))));
 usersRouter.post("/login-activity/sessions/:id/end", h(async (req, res) => res.json(await u.endSession(uuid(req), await actorName(req)))));
 
 usersRouter.get("/student-accounts", h(async (req, res) => res.json(await u.listStudentAccounts(req.query))));
