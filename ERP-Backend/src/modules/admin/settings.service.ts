@@ -4,6 +4,9 @@ import { check } from "../../lib/db";
 import { HttpError } from "../../lib/http-error";
 
 const str = (max = 200) => z.string().trim().max(max);
+/** A web address, or a small image sent from the browser as a data address. */
+const DATA_IMAGE = /^data:image\/(png|jpeg|jpg|svg\+xml|webp|x-icon|vnd\.microsoft\.icon);base64,/;
+const image = z.union([str(500).url(), z.string().max(600_000).regex(DATA_IMAGE), z.literal("")]);
 
 /** Every setting the platform understands, with its validator. Unknown keys are rejected. */
 export const SETTING_SCHEMAS: Record<string, z.ZodTypeAny> = {
@@ -16,9 +19,9 @@ export const SETTING_SCHEMAS: Record<string, z.ZodTypeAny> = {
   "contact.hours": str(100),
   "contact.sales_email": z.union([str(200).email(), z.literal("")]),
   "contact.address": str(400),
-  "branding.mark_url": z.union([str(500).url(), z.literal("")]),
-  "branding.favicon_url": z.union([str(500).url(), z.literal("")]),
-  "branding.invoice_logo_url": z.union([str(500).url(), z.literal("")]),
+  "branding.mark_url": image,
+  "branding.favicon_url": image,
+  "branding.invoice_logo_url": image,
   "regional.countries": z.array(z.enum(["IN", "AE", "NP", "LK", "BD"])).min(1, "Keep at least one country."),
   "locale.week_start": z.enum(["Monday", "Sunday"]),
   "locale.financial_year": z.enum(["April - March", "January - December"]),
@@ -37,7 +40,7 @@ export const SETTING_SCHEMAS: Record<string, z.ZodTypeAny> = {
   "general.support_phone": str(30),
   "general.trial_days": z.number().int().min(0).max(90),
   "general.gst_number": str(20),
-  "branding.logo_url": z.union([str(500).url(), z.literal("")]),
+  "branding.logo_url": image,
   "branding.primary_color": str(9).regex(/^#[0-9a-fA-F]{6}$/, "Use a hex colour like #0294CE."),
   "locale.timezone": str(60).min(1),
   "locale.currency": str(3).length(3),
@@ -93,6 +96,31 @@ export const SETTING_SCHEMAS: Record<string, z.ZodTypeAny> = {
   "retention.audit_logs_days": z.number().int().min(180).max(3650),
   "security.max_failed_logins": z.number().int().min(3).max(20),
   "security.lockout_minutes": z.number().int().min(1).max(1440),
+  "general.app_store_name": str(60),
+  "regional.states": z.array(str(60)).max(100),
+  "locale.schools_own_timezone": z.boolean(),
+  "locale.show_viewer_timezone": z.boolean(),
+  "security.password_expiry_days": z.number().int().min(0).max(365),
+  "security.password_history": z.number().int().min(0).max(24),
+  "security.require_2fa_principals": z.boolean(),
+  "security.mfa_methods": z.enum(["app_or_sms", "sms", "email"]),
+  "security.session_timeout_school_minutes": z.number().int().min(15).max(10080),
+  "security.session_timeout_app_days": z.number().int().min(1).max(365),
+  "security.logout_on_browser_close": z.boolean(),
+  "files.max_document_mb": z.number().int().min(1).max(500),
+  "files.max_image_mb": z.number().int().min(1).max(100),
+  "files.max_video_mb": z.number().int().min(1).max(5000),
+  "files.allowed_types": str(300),
+  "files.scan_viruses": z.boolean(),
+  "files.compress_photos": z.boolean(),
+  "files.storage": str(60),
+  "files.delivery": str(60),
+  "files.cold_storage": z.boolean(),
+  "maintenance.parent_read_only": z.boolean(),
+  "app.support_impersonation": z.boolean(),
+  "app.beta_menu": z.boolean(),
+  "app.rate_limit_per_minute": z.number().int().min(10).max(10000),
+  "app.debug_logging": z.boolean(),
   "accounts.student_login_domain": z.string().trim().toLowerCase().regex(/^[a-z0-9.-]+\.[a-z]{2,}$/, "Enter a domain like students.myschool.in."),
   "accounts.parent_login_domain": z.string().trim().toLowerCase().regex(/^[a-z0-9.-]+\.[a-z]{2,}$/, "Enter a domain like parents.myschool.in."),
 };

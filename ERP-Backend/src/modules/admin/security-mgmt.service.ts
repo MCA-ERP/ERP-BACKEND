@@ -52,6 +52,7 @@ export interface SecurityAlert {
   when: string;
   ip?: string;
   blocked?: boolean;
+  status?: "New" | "Acknowledged" | "Resolved";
 }
 
 /** Counts per address, for the failed sign-ins in the window. */
@@ -94,6 +95,9 @@ export async function listAlerts(): Promise<SecurityAlert[]> {
   if ((denied.count ?? 0) >= 20) alerts.push({ id: "denied", severity: "Low", title: `${denied.count} blocked attempts to open pages without permission`, detail: "In the last 24 hours. Someone may be exploring areas their role cannot use.", when: nowIso });
   const staffNo2fa = ((staff.data ?? []) as unknown[]).length;
   if (required && staffNo2fa > 0) alerts.push({ id: "no-2fa", severity: "Medium", title: `${staffNo2fa} team member${staffNo2fa === 1 ? "" : "s"} without a mobile number or code set up`, detail: "Two-factor sign-in is required for the team. Check that each person has a mobile number or working email.", when: nowIso });
+
+  const states = new Map(((check(await supabaseAdmin.from("security_alert_states").select("alert_id, status").limit(2000)) as { alert_id: string; status: "acknowledged" | "resolved" }[]) ?? []).map((r) => [r.alert_id, r.status]));
+  for (const a of alerts) a.status = states.get(a.id) === "resolved" ? "Resolved" : states.get(a.id) === "acknowledged" ? "Acknowledged" : "New";
 
   const rank = { High: 0, Medium: 1, Low: 2 };
   return alerts.sort((a, b) => rank[a.severity] - rank[b.severity] || b.when.localeCompare(a.when));
@@ -187,4 +191,28 @@ export async function staffMfaStatus() {
   ) as unknown as { id: string; first_name: string; last_name: string; email: string; phone: string | null; otp_enabled: boolean; last_login_at: string | null; roles: { display_name: string } }[];
   const required = await getSetting<boolean>("security.require_2fa_staff", false);
   return { required, people: rows.map((r) => ({ ...r, has_phone: !!r.phone, code_on: required || r.otp_enabled })) };
+}
+
+/** Marks an alert as seen or dealt with. The mark stays for as long as the alert does. */
+export async function setAlertStatus(alertId: string, status: "acknowledged" | "resolved", actorProfileId?: string) {
+  check(await supabaseAdmin.from("security_alert_states").upsert({ alert_id: alertId.slice(0, 200), status, updated_by: actorProfileId ?? null, updated_at: new Date().toISOString() }, { onConflict: "alert_id" }).select("alert_id"));
+  return { success: true };
+}
+
+/** Emails a team member to set up their sign-in code. */
+export async function remindMfa(profileId: string) {
+  const p = check(await supabaseAdmin.from("user_profiles").select("id, first_name, email").eq("id", profileId).is("institution_id", null).maybeSingle()) as { first_name: string; email: string } | null;
+  if (!p) throw new HttpError(404, "That team member was not found.");
+  const { sendEmail } = await import("../../lib/mailer");
+  const [fromName, fromAddress, replyTo] = await Promise.all([getSetting<string>("notify.email_from_name", ""), getSetting<string>("notify.email_from_address", ""), getSetting<string>("notify.reply_to", "")]);
+  await sendEmail({
+    to: p.email, fromName: fromName || undefined, fromAddress: fromAddress || undefined, replyTo: replyTo || undefined,
+    subject: "Please set up two-factor sign-in",
+    text: `Hi ${p.first_name},
+
+Two-factor sign-in is required for the platform team. Please add a mobile number to your profile so we can send you a sign-in code.
+
+Thank you.`,
+  });
+  return { success: true };
 }

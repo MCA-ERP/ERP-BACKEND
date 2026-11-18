@@ -52,6 +52,20 @@ export const publicLimiter = limiter(60_000, 60, "Too many requests. Please slow
 export const applicationLimiter = limiter(60 * 60_000, 5, "Too many applications from this address. Please try again later.");
 
 /** Partner API (API-key authenticated). */
-export const partnerLimiter = limiter(60_000, 120, "Too many requests. Please slow down.");
+/** Partner API (API-key authenticated). The limit is the platform's "Rate limit" setting. */
+export const partnerLimiter = rateLimit({
+  windowMs: 60_000,
+  max: async () => {
+    try {
+      const { getSetting } = await import("../modules/admin/settings.service");
+      return await getSetting<number>("app.rate_limit_per_minute", 120);
+    } catch {
+      return 120;
+    }
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many requests. Please slow down." },
+});
 /** Payment gateway webhooks. */
 export const webhookLimiter = limiter(60_000, 120, "Too many requests.");

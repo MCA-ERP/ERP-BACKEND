@@ -474,7 +474,7 @@ adminRouter.get("/assist/status", h(async (_req, res) => res.json({ configured: 
 adminRouter.post("/assist/chat", h(async (req, res) => {
   const { messages, page } = chatSchema.parse(req.body);
   if (messages[messages.length - 1].role !== "user") return res.status(400).json({ error: "Ask a question first." });
-  return res.json(await assist.chat(messages, page, req.user?.profileId ?? "anonymous"));
+  return res.json(await assist.chat(messages, page, req.user?.profileId ?? "anonymous", { role: req.user?.role, permissions: req.user?.permissions ?? [] }));
 }));
 adminRouter.use(billingRouter);
 adminRouter.use(insightsRouter);
