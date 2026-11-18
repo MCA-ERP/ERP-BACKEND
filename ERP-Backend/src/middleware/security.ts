@@ -10,7 +10,7 @@ export function allowedOrigins(): string[] {
     .split(",")
     .map((o) => o.trim().replace(/\/$/, ""))
     .filter(Boolean);
-  const dev = isProduction ? [] : ["http://localhost:3000", "http://127.0.0.1:3000"];
+  const dev = isProduction ? [] : ["http://localhost:3000", "http://127.0.0.1:3000", "http://admin.localhost:3000", "http://erp.localhost:3000"];
   return Array.from(new Set([...configured, ...dev]));
 }
 

@@ -10,10 +10,10 @@ import type { AssistAction } from "./assist-actions";
  * other personal details) and its knowledge of the portal. It never changes data: it points to the page that does.
  * Runs on Groq (GROQ_API_KEY) or, if that is not set, Anthropic (ANTHROPIC_API_KEY). ASSIST_MODEL overrides the model.
  */
-const provider = (): "groq" | "anthropic" | null => (process.env.GROQ_API_KEY ? "groq" : process.env.ANTHROPIC_API_KEY ? "anthropic" : null);
-const MODEL = () => process.env.ASSIST_MODEL || (provider() === "groq" ? "openai/gpt-oss-120b" : "claude-sonnet-5-5");
+export const provider = (): "groq" | "anthropic" | null => (process.env.GROQ_API_KEY ? "groq" : process.env.ANTHROPIC_API_KEY ? "anthropic" : null);
+export const MODEL = () => process.env.ASSIST_MODEL || (provider() === "groq" ? "openai/gpt-oss-120b" : "claude-sonnet-5-5");
 export const assistConfigured = () => provider() !== null;
-const NOT_SET = "The AI assistant is not set up yet. Ask the platform team to add GROQ_API_KEY to the server.";
+export const NOT_SET = "The AI assistant is not set up yet. Ask the platform team to add GROQ_API_KEY to the server.";
 
 export interface ChatMessage { role: "user" | "assistant"; content: string }
 
@@ -50,7 +50,7 @@ const PORTAL_MAP = `Modules in the Super Admin portal: Dashboard (overview, scho
 
 // A small per-person limit so the assistant cannot be used to run up costs.
 const recent = new Map<string, number[]>();
-function limit(who: string) {
+export function limit(who: string) {
   const now = Date.now();
   const list = (recent.get(who) ?? []).filter((t) => now - t < 60_000);
   if (list.length >= 12) throw new HttpError(429, "You are asking quickly. Wait a moment and try again.");
@@ -137,9 +137,9 @@ export async function chat(messages: ChatMessage[], page: string | undefined, wh
     "Work like this: if unsure which table holds something, call list_tables; call describe_table before using a table for the first time; then query or group_count. You may make several lookups for one question.",
     "When the person asks to export, download or get a file, call query with export=true. When it helps them get somewhere, call open_page_link with an address from the portal map. You cannot change anything: for actions, say which page to open and what to click.",
     "Answer directly and briefly in plain language. Write **bold** around page names and menu paths, joined with arrows, like **Role & Permissions → Permissions**. Use short lines or simple lists; never markdown tables, pipes or headings. Amounts are Indian rupees (columns ending _paise are paise, divide by 100). Use dates like 12 Oct 2026. The person is platform staff, so names and emails from the data are fine to show.",
-    "NEVER show ids or UUIDs: people do not know them. Use the names (the *_name fields); if only an id is available, look up its name first (roles, plans, schools, modules, user_profiles) or leave it out.",
-    "Call tools only through the tool-calling mechanism. NEVER write a tool call, a function name or braces into your answer. NEVER invent page addresses: take them only from portal_guide.",
-    "When someone asks how to open or find a page, answer in one line with the bold path (for example: Open **Role & Permissions → Permissions**.), call open_page_link once so they get a button, and add nothing else. No explanation of where it is.",
+    "Reply in the language the person wrote or spoke in (English, Hindi or Telugu); keep page names in English. NEVER show ids or UUIDs: people do not know them. Use the names (the *_name fields); if only an id is available, look up its name first (roles, plans, schools, modules, user_profiles) or leave it out.",
+    "NEVER write HTML or markup such as <button> or <a> in an answer: buttons are made only by calling open_page_link. Call tools only through the tool-calling mechanism. NEVER write a tool call, a function name or braces into your answer. NEVER invent page addresses: take them only from portal_guide.",
+    "When someone tells you to open or go to a page (in English, Hindi or Telugu, typed or spoken), find its address with portal_guide and call open_page_link with go=true, then confirm in one short line. Do not say it is open unless you called the tool. " + "When someone asks how to open or find a page, answer in one line with the bold path (for example: Open **Role & Permissions → Permissions**.), call open_page_link once so they get a button, and add nothing else. No explanation of where it is.",
     page ? `The person is currently on: ${page}` : "",
     "For where things are in the portal, or what a page does, call portal_guide.",
     `Live counts right now:\n${await snapshot()}`,
@@ -167,8 +167,44 @@ export function tidy(text: string): string {
     .replace(/`?open_page_link\([^)]*\)`?/g, "")
     .replace(UUID_IN_TEXT, "")
     .replace(/\(\s*\)/g, "")
+    .replace(/<\/?[a-z][^>]*>/gi, "")
     .replace(/`/g, "")
     .replace(/[ ]{2,}/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+/**
+ * Turns a spoken question into text. Groq's Whisper model recognises English, Hindi and Telugu by itself, so nobody has to
+ * pick a language. The audio is sent to Groq for this one request and not kept here.
+ */
+export async function transcribe(audio: Buffer, mime: string, who: string): Promise<{ text: string }> {
+  if (!process.env.GROQ_API_KEY) throw new HttpError(503, "Voice needs the AI key. Ask the platform team to add GROQ_API_KEY to the server.");
+  if (audio.length < 1500) throw new HttpError(400, "I did not hear anything. Tap the microphone and speak again.");
+  limit(who);
+  const form = new FormData();
+  const ext = /mp4|m4a/.test(mime) ? "m4a" : /ogg/.test(mime) ? "ogg" : /wav/.test(mime) ? "wav" : "webm";
+  form.append("file", new Blob([new Uint8Array(audio)], { type: mime || "audio/webm" }), "voice." + ext);
+  form.append("model", process.env.TRANSCRIBE_MODEL || "whisper-large-v3-turbo");
+  form.append("response_format", "json");
+  form.append("temperature", "0");
+  form.append("prompt", "School ERP admin portal: schools, students, invoices, roles, permissions, subscriptions, tickets, open, export, show.");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30_000);
+  try {
+    const res = await fetch("https://api.groq.com/openai/v1/audio/transcriptions", { method: "POST", headers: { authorization: "Bearer " + process.env.GROQ_API_KEY }, body: form, signal: controller.signal });
+    if (!res.ok) {
+      console.error("Transcription failed:", res.status, (await res.text().catch(() => "")).slice(0, 300));
+      throw new HttpError(502, res.status === 429 ? "Voice is busy right now. Try again in a minute." : "I could not understand that recording. Try again.");
+    }
+    const body = (await res.json()) as { text?: string };
+    const text = (body.text ?? "").trim();
+    if (!text) throw new HttpError(400, "I did not hear anything. Tap the microphone and speak again.");
+    return { text };
+  } catch (err) {
+    if (err instanceof HttpError) throw err;
+    throw new HttpError(502, "Voice did not respond in time. Try again.");
+  } finally {
+    clearTimeout(timer);
+  }
 }
