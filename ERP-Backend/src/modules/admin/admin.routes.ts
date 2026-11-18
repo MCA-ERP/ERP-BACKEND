@@ -1,4 +1,4 @@
-import { Router, Request, Response, NextFunction } from "express";
+import express, { Router, Request, Response, NextFunction } from "express";
 import { z, ZodError } from "zod";
 import { authGuard } from "../../middleware/authGuard";
 import { sendEmail } from "../../lib/mailer";
@@ -471,6 +471,12 @@ adminRouter.post("/assist/notice", h(async (req, res) => {
   res.json(await assist.draftNotice(points, kind, req.user?.profileId ?? "anonymous"));
 }));
 adminRouter.get("/assist/status", h(async (_req, res) => res.json({ configured: assist.assistConfigured() })));
+// a recorded question (up to 2 MB of audio), turned into text; the browser then sends it like a typed question
+adminRouter.post("/assist/transcribe", express.raw({ type: "audio/*", limit: "2mb" }), h(async (req, res) => {
+  const mime = String(req.headers["content-type"] ?? "audio/webm").split(";")[0];
+  if (!Buffer.isBuffer(req.body)) return res.status(400).json({ error: "Send the recording as audio." });
+  return res.json(await assist.transcribe(req.body, mime, req.user?.profileId ?? "anonymous"));
+}));
 adminRouter.post("/assist/chat", h(async (req, res) => {
   const { messages, page } = chatSchema.parse(req.body);
   if (messages[messages.length - 1].role !== "user") return res.status(400).json({ error: "Ask a question first." });

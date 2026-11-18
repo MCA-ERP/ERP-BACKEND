@@ -177,3 +177,52 @@ export async function overview(inst: string, yearId?: string) {
 export function assertTab(tab: string | undefined, allowed: string[]) {
   if (tab && !allowed.includes(tab)) throw new HttpError(404, "Unknown tab.");
 }
+
+// ═════════════ academic overview ═════════════
+export async function academicOverview(inst: string, yearId?: string) {
+  const { years, year } = await pickYear(inst, yearId);
+  const [grades, subjects, sections, campuses] = await Promise.all([
+    supabaseAdmin.from("grades").select("id, name, code, sort_order, is_active").eq("institution_id", inst).order("sort_order"),
+    supabaseAdmin.from("subjects").select("id, name, code, is_active").eq("institution_id", inst).order("name"),
+    year ? supabaseAdmin.from("sections").select("id, name, grade_id, campus_id, class_teacher_id").eq("institution_id", inst).eq("academic_year_id", year.id) : Promise.resolve({ data: [] }),
+    supabaseAdmin.from("campuses").select("id, name").eq("institution_id", inst),
+  ]);
+  const enrol = year ? await enrolments(inst, year.id) : [];
+  const gradeList = (grades.data ?? []) as { id: string; name: string; is_active: boolean }[];
+  const sectionList = (sections.data ?? []) as { id: string; grade_id: string; campus_id: string | null; class_teacher_id: string | null }[];
+  const campusName = new Map(((campuses.data ?? []) as { id: string; name: string }[]).map((c) => [c.id, c.name]));
+  const classes = gradeList.map((g) => {
+    const secs = sectionList.filter((s) => s.grade_id === g.id);
+    const campus = [...new Set(secs.map((s) => (s.campus_id ? campusName.get(s.campus_id) : null)).filter(Boolean))].join(", ");
+    return { id: g.id, name: g.name, sections: secs.length, students: enrol.filter((e) => one(e.grades)?.id === g.id).length, campus: campus || "—", status: g.is_active ? "Active" : "Inactive" };
+  });
+  const subjectList = (subjects.data ?? []) as { id: string; name: string; code: string; is_active: boolean }[];
+  const students = enrol.length;
+  return {
+    years, year,
+    classes,
+    stats: { classes: gradeList.length, first: gradeList[0]?.name ?? null, last: gradeList[gradeList.length - 1]?.name ?? null, sections: sectionList.length, average: sectionList.length ? Math.round(students / sectionList.length) : 0, teachers_assigned: sectionList.filter((s) => s.class_teacher_id).length },
+    subjects: subjectList.map((s) => ({ id: s.id, name: s.name, code: s.code, status: s.is_active ? "Active" : "Inactive" })),
+  };
+}
+
+// ═════════════ recent activity (the school's audit trail) ═════════════
+const nice = (a: string) => {
+  if (/\/auth\/login/.test(a)) return "Signed in";
+  if (/\/auth\/logout/.test(a)) return "Signed out";
+  const [method, ...rest] = a.split(" ");
+  const path = rest.join(" ").replace(/^\/api\/v1\//, "").replace(/\/[0-9a-f-]{36}/g, "").replace(/\//g, " ").replace(/[-_]/g, " ").trim();
+  const verb = ({ POST: "Added", PUT: "Updated", PATCH: "Updated", DELETE: "Removed" } as Record<string, string>)[method] ?? method;
+  return `${verb} ${path}`.trim();
+};
+
+export async function recentActivity(inst: string, q: { tab?: string; search?: string }) {
+  let query = supabaseAdmin.from("audit_logs").select("id, actor_email, action, entity_name, new_data, ip_address, created_at").eq("institution_id", inst).order("created_at", { ascending: false }).limit(300);
+  if (q.tab === "changes") query = query.not("new_data", "is", null);
+  const rows = check(await query) as { id: string; actor_email: string; action: string; entity_name: string; new_data: Record<string, unknown> | null; ip_address: string | null; created_at: string }[];
+  const term = (q.search ?? "").trim().toLowerCase();
+  const list = rows
+    .map((r) => ({ id: r.id, time: r.created_at, user: r.actor_email, action: nice(r.action), record: r.entity_name.replace(/^school\/?/, "") || "school", change: r.new_data ? Object.keys(r.new_data).slice(0, 4).join(", ") : "—", ip: r.ip_address ?? "—", status: "Logged" }))
+    .filter((r) => !term || `${r.user} ${r.action} ${r.record}`.toLowerCase().includes(term));
+  return { list };
+}

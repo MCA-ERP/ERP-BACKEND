@@ -137,7 +137,7 @@ export const TOOLS = [
     parameters: { type: "object", properties: { table: { type: "string" }, column: { type: "string" }, filters: { type: "array", items: { type: "object", properties: { column: { type: "string" }, op: { type: "string", enum: [...OPS] }, value: {} }, required: ["column", "op"] } } }, required: ["table", "column"] },
   },
   { name: "portal_guide", description: "How the portal is organised: every module, submenu and page with its address. Call with a module name (like 'payments') for detail, or with no module for the list of modules. Use it to explain where something is or what a page does.", parameters: { type: "object", properties: { module: { type: "string" } } } },
-  { name: "open_page_link", description: "Offer a button that opens a portal page. Use an address from the portal map, like /super-admin/payments/invoices.", parameters: { type: "object", properties: { href: { type: "string" }, label: { type: "string" } }, required: ["href", "label"] } },
+  { name: "open_page_link", description: "Offer a button that opens a portal page. Use an address from the portal map, like /super-admin/payments/invoices.", parameters: { type: "object", properties: { href: { type: "string" }, label: { type: "string" }, go: { type: "boolean", description: "true when the person asked to open or go to the page now (in any language): the portal then takes them there. false when they only asked where it is." } }, required: ["href", "label"] } },
 ] as const;
 
 function applyFilters(q: any, filters: Filter[] | undefined) { // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -171,7 +171,7 @@ export async function runTool(name: string, input: Record<string, unknown>, user
       const known = new Set([...PORTAL_MENU.matchAll(/\(\/super-admin\/([a-z0-9-]+\/[a-z0-9-]+)\)/gi)].map((m) => m[1]));
       const path = href.split("?")[0].replace(/^\/super-admin\//, "");
       if (!known.has(path)) return "That address is not in the portal. Call portal_guide and use an address from it.";
-      actions.push({ kind: "link", label: String(input.label ?? "Open page").slice(0, 60), href });
+      actions.push({ kind: "link", label: String(input.label ?? "Open page").slice(0, 60), href, go: input.go === true });
       return "Button added.";
     }
     const table = String(input.table ?? "");
@@ -249,8 +249,10 @@ async function post(url: string, headers: Record<string, string>, body: unknown,
 }
 
 /** Lets the model look things up (read-only) until it has an answer. Works with Groq or Anthropic. */
-export async function runAgent(opts: { provider: "groq" | "anthropic"; model: string; system: string; messages: Msg[]; user: Caller }): Promise<{ text: string; actions: AssistAction[] }> {
+export async function runAgent(opts: { provider: "groq" | "anthropic"; model: string; system: string; messages: Msg[]; user: Caller; tools?: readonly { name: string; description: string; parameters: unknown }[]; run?: (name: string, input: Record<string, unknown>, actions: AssistAction[]) => Promise<string> }): Promise<{ text: string; actions: AssistAction[] }> {
   const actions: AssistAction[] = [];
+  const tools = opts.tools ?? TOOLS;
+  const run = opts.run ?? ((n: string, i: Record<string, unknown>, a: AssistAction[]) => runTool(n, i, opts.user, a));
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 90_000);
   try {
@@ -259,7 +261,7 @@ export async function runAgent(opts: { provider: "groq" | "anthropic"; model: st
       for (let round = 0; round < 7; round++) {
         const body = await post("https://api.groq.com/openai/v1/chat/completions", { authorization: `Bearer ${process.env.GROQ_API_KEY}` }, {
           model: opts.model, max_tokens: 1400, temperature: 0.2, ...(opts.model.includes("gpt-oss") ? { reasoning_effort: "low" } : {}),
-          messages: history, tools: TOOLS.map((t) => ({ type: "function", function: t })), tool_choice: "auto",
+          messages: history, tools: tools.map((t) => ({ type: "function", function: t })), tool_choice: "auto",
         }, controller.signal);
         const msg = body.choices?.[0]?.message ?? {};
         const calls = (msg.tool_calls ?? []) as { id: string; function: { name: string; arguments: string } }[];
@@ -268,7 +270,7 @@ export async function runAgent(opts: { provider: "groq" | "anthropic"; model: st
         for (const c of calls) {
           let input: Record<string, unknown> = {};
           try { input = JSON.parse(c.function.arguments || "{}"); } catch { /* the tool reports the missing fields */ }
-          history.push({ role: "tool", tool_call_id: c.id, content: await runTool(c.function.name, input, opts.user, actions) });
+          history.push({ role: "tool", tool_call_id: c.id, content: await run(c.function.name, input, actions) });
         }
       }
       return { text: "That took more steps than I can do in one go. Try asking for something narrower.", actions };
@@ -276,14 +278,14 @@ export async function runAgent(opts: { provider: "groq" | "anthropic"; model: st
     const history: any[] = opts.messages.map((m) => ({ role: m.role, content: m.content })); // eslint-disable-line @typescript-eslint/no-explicit-any
     for (let round = 0; round < 7; round++) {
       const body = await post("https://api.anthropic.com/v1/messages", { "x-api-key": process.env.ANTHROPIC_API_KEY as string, "anthropic-version": "2023-06-01" }, {
-        model: opts.model, max_tokens: 1400, system: opts.system, messages: history, tools: TOOLS.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })),
+        model: opts.model, max_tokens: 1400, system: opts.system, messages: history, tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters })),
       }, controller.signal);
       const blocks = (body.content ?? []) as { type: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }[];
       const calls: Call[] = blocks.filter((b) => b.type === "tool_use").map((b) => ({ id: b.id as string, name: b.name as string, input: b.input ?? {} }));
       if (!calls.length) return { text: blocks.filter((b) => b.type === "text").map((b) => b.text ?? "").join("\n").trim(), actions };
       history.push({ role: "assistant", content: blocks });
       const results = [];
-      for (const c of calls) results.push({ type: "tool_result", tool_use_id: c.id, content: await runTool(c.name, c.input, opts.user, actions) });
+      for (const c of calls) results.push({ type: "tool_result", tool_use_id: c.id, content: await run(c.name, c.input, actions) });
       history.push({ role: "user", content: results });
     }
     return { text: "That took more steps than I can do in one go. Try asking for something narrower.", actions };

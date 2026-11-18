@@ -1,11 +1,14 @@
-import { Router, Request, Response, NextFunction } from "express";
+import express, { Router, Request, Response, NextFunction } from "express";
 import { z } from "zod";
 import { authGuard } from "../../middleware/authGuard";
 import { requirePermission } from "../../middleware/rbacGuard";
 import { requireInstitutionId } from "../../lib/tenant";
-import { sendError } from "../../lib/http-error";
+import { HttpError, sendError } from "../../lib/http-error";
 import * as svc from "./school.service";
 import * as dash from "./dashboard.service";
+import { schoolChat } from "./school-assist";
+import { transcribe as transcribeAudio } from "../admin/assist.service";
+import * as profileSvc from "./profile.service";
 import * as support from "../admin/support.service";
 import { listSchoolAnnouncements, markAnnouncementRead } from "../admin/communication.service";
 import { actorName } from "../../lib/actor";
@@ -67,6 +70,42 @@ schoolRouter.get("/dashboard/students", view, h((req, _res, inst) => dash.studen
 schoolRouter.get("/dashboard/staff", view, h((req, _res, inst) => dash.staffStats(inst, { tab: q(req, "tab"), search: q(req, "search"), type: q(req, "type") })));
 schoolRouter.get("/dashboard/attendance", view, h((req, _res, inst) => dash.attendanceOverview(inst, q(req, "year"))));
 schoolRouter.get("/dashboard/admissions", view, h((req, _res, inst) => dash.admissionOverview(inst, q(req, "year"))));
+schoolRouter.get("/dashboard/academics", view, h((req, _res, inst) => dash.academicOverview(inst, q(req, "year"))));
+schoolRouter.get("/dashboard/activity", view, h((req, _res, inst) => dash.recentActivity(inst, { tab: q(req, "tab"), search: q(req, "search") })));
+
+// ── assistant ──
+schoolRouter.post("/assist/chat", view, h(async (req, _res, inst) => {
+  const { messages, page } = z.object({ messages: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().trim().min(1).max(4000) })).min(1).max(20), page: z.string().trim().max(200).optional() }).parse(req.body);
+  if (messages[messages.length - 1].role !== "user") throw new HttpError(400, "Ask a question first.");
+  return schoolChat(messages, page, req.user?.profileId ?? "anonymous", inst, req.user?.roleDisplayName ?? "");
+}));
+schoolRouter.post("/assist/transcribe", view, express.raw({ type: "audio/*", limit: "2mb" }), h(async (req, _res) => {
+  const mime = String(req.headers["content-type"] ?? "audio/webm").split(";")[0];
+  if (!Buffer.isBuffer(req.body)) throw new HttpError(400, "Send the recording as audio.");
+  return transcribeAudio(req.body, mime, req.user?.profileId ?? "anonymous");
+}));
+
+// ── my profile (the signed-in person's own details) ──
+const me = (req: Request): string => {
+  const id = req.user?.profileId;
+  if (!id) throw new HttpError(401, "Sign in again.");
+  return id;
+};
+schoolRouter.get("/me/profile", h(async (req) => profileSvc.getMyProfile(me(req))));
+schoolRouter.put("/me/contact", h(async (req) => {
+  const input = z.object({
+    mobile: z.string().trim().max(30).optional(), alt_phone: z.string().trim().max(30).optional(), personal_email: z.union([z.string().trim().email().max(255), z.literal("")]).optional(),
+    date_of_birth: z.union([z.string().regex(/^\d{4}-\d{2}-\d{2}$/), z.literal("")]).optional(), blood_group: z.string().trim().max(5).optional(), home_address: z.string().trim().max(500).optional(),
+    emergency_name: z.string().trim().max(150).optional(), emergency_relation: z.string().trim().max(40).optional(), emergency_phone: z.string().trim().max(30).optional(),
+  }).parse(req.body);
+  return profileSvc.saveContact(me(req), input);
+}));
+schoolRouter.get("/me/qualifications", h(async (req) => ({ items: await profileSvc.listQualifications(me(req)) })));
+schoolRouter.post("/me/qualifications", h(async (req, res) => {
+  const input = z.object({ title: z.string().trim().min(2).max(200), institution: z.string().trim().min(2).max(200), year: z.number().int().min(1950).max(2100), result: z.string().trim().max(100).optional() }).parse(req.body);
+  res.status(201);
+  return { item: await profileSvc.addQualification(me(req), input) };
+}));
 
 schoolRouter.get("/setup/status", view, h((_req, _res, inst) => svc.getSetupStatus(inst)));
 

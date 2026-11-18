@@ -39,7 +39,7 @@ export async function auditLogger(req: Request, res: Response, next: NextFunctio
           institution_id: req.user?.institutionId || null,
           action: `${req.method} ${req.baseUrl}${req.path}`,
           entity_name: req.baseUrl.replace("/api/v1/", "") || "general",
-          new_data: req.body ? redact(req.body) : null,
+          new_data: req.body && !Buffer.isBuffer(req.body) ? redact(req.body) : null, // never store uploaded audio
           ip_address: ipAddress,
           user_agent: userAgent,
         });

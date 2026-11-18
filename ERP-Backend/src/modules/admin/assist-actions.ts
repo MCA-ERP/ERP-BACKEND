@@ -4,7 +4,7 @@ import { check } from "../../lib/db";
 type Cell = string | number | null;
 export type AssistAction =
   | { kind: "export"; label: string; name: string; head: string[]; rows: Cell[][]; auto?: boolean }
-  | { kind: "link"; label: string; href: string };
+  | { kind: "link"; label: string; href: string; go?: boolean };
 export interface AssistResult { reply: string; actions: AssistAction[] }
 
 const rupees = (paise: number | null | undefined) => `₹${Math.round((paise ?? 0) / 100).toLocaleString("en-IN")}`;
