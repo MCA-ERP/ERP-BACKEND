@@ -5,6 +5,7 @@ import { requirePermission } from "../../middleware/rbacGuard";
 import { requireInstitutionId } from "../../lib/tenant";
 import { sendError } from "../../lib/http-error";
 import * as svc from "./school.service";
+import * as dash from "./dashboard.service";
 import * as support from "../admin/support.service";
 import { listSchoolAnnouncements, markAnnouncementRead } from "../admin/communication.service";
 import { actorName } from "../../lib/actor";
@@ -58,6 +59,14 @@ const subjectSchema = z.object({
   code: z.string().trim().min(1).max(30).transform((v) => v.toUpperCase()),
   name: z.string().trim().min(1).max(150),
 });
+
+// ── dashboard ──
+const q = (req: Request, k: string) => (typeof req.query[k] === "string" ? (req.query[k] as string) : undefined);
+schoolRouter.get("/dashboard/overview", view, h((req, _res, inst) => dash.overview(inst, q(req, "year"))));
+schoolRouter.get("/dashboard/students", view, h((req, _res, inst) => dash.studentStats(inst, { year: q(req, "year"), tab: q(req, "tab"), search: q(req, "search"), grade: q(req, "grade"), gender: q(req, "gender") })));
+schoolRouter.get("/dashboard/staff", view, h((req, _res, inst) => dash.staffStats(inst, { tab: q(req, "tab"), search: q(req, "search"), type: q(req, "type") })));
+schoolRouter.get("/dashboard/attendance", view, h((req, _res, inst) => dash.attendanceOverview(inst, q(req, "year"))));
+schoolRouter.get("/dashboard/admissions", view, h((req, _res, inst) => dash.admissionOverview(inst, q(req, "year"))));
 
 schoolRouter.get("/setup/status", view, h((_req, _res, inst) => svc.getSetupStatus(inst)));
 
