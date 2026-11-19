@@ -18,7 +18,9 @@ export const corsOptions: CorsOptions = {
   origin(origin, callback) {
     // no Origin header: server-to-server calls such as payment webhooks, curl, health checks
     if (!origin) return callback(null, true);
-    callback(null, allowedOrigins().includes(origin));
+    // development: any port of localhost, 127.0.0.1 or *.localhost (a second dev server often lands on 3001)
+    const local = !isProduction && /^https?:\/\/(localhost|127\.0\.0\.1|[a-z0-9-]+\.localhost)(:\d+)?$/i.test(origin);
+    callback(null, local || allowedOrigins().includes(origin));
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
