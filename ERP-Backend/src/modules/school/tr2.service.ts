@@ -61,7 +61,7 @@ export async function arrive(inst: string, tripId: string, input: unknown) {
   check(await supabaseAdmin.from("tr_alerts").insert({ institution_id: inst, trip_id: tripId, stop_id, stop_name: stop.name, families: sent }).select("id"));
   const arrived = [...t.arrived, stop_id]; const total = (check(await supabaseAdmin.from("tr_stops").select("id").eq("route_id", t.route_id)) as unknown[]).length;
   const row: Record<string, unknown> = { arrived }; if (arrived.length >= total) { const rt = check(await supabaseAdmin.from("tr_routes").select("at_school").eq("id", t.route_id).single()) as { at_school: string | null }; row.ended_at = nowHm(); row.status = t.ttype === "Morning" && rt.at_school && mins(nowHm()) > mins(rt.at_school) + 10 ? "Delayed" : "Completed"; }
-  check(await supabaseAdmin.from("tr_trips").update(row).eq("id", tripId).select("id"));
+  check(await supabaseAdmin.from("tr_trips").update(row).eq("id", tripId).eq("institution_id", inst).select("id"));
   return { families: sent, done: arrived.length >= total };
 }
 
@@ -103,8 +103,8 @@ export async function addMaintenance(inst: string, input: unknown) {
 export async function setMaintenance(inst: string, id: string, input: unknown) {
   const { status } = z.object({ status: z.enum(["Scheduled", "In progress", "Done"]) }).strict().parse(input);
   const m = check(await supabaseAdmin.from("tr_maintenance").select("id, vehicle_id, mtype").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; vehicle_id: string; mtype: string } | null; if (!m) throw new HttpError(404, "Not found.");
-  check(await supabaseAdmin.from("tr_maintenance").update({ status }).eq("id", id).select("id"));
-  if (m.mtype === "Repairs") check(await supabaseAdmin.from("tr_vehicles").update({ status: status === "In progress" ? "In maintenance" : "Active" }).eq("id", m.vehicle_id).select("id"));
+  check(await supabaseAdmin.from("tr_maintenance").update({ status }).eq("id", id).eq("institution_id", inst).select("id"));
+  if (m.mtype === "Repairs") check(await supabaseAdmin.from("tr_vehicles").update({ status: status === "In progress" ? "In maintenance" : "Active" }).eq("id", m.vehicle_id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }
 

@@ -117,7 +117,7 @@ export async function settleFine(inst: string, id: string, input: unknown, role:
   if (!f) throw new HttpError(404, "Not found.");
   if (f.status !== "Unpaid") throw new HttpError(409, "That fine is already settled.");
   if (i.status === "Waived") { const set = await feeSettings(inst); if (!(FINE_ROLES[set.fine_waiver] ?? []).includes(role)) throw new HttpError(403, `Only the ${set.fine_waiver} can waive fines.`); }
-  check(await supabaseAdmin.from("fee_fines").update({ status: i.status, mode: i.status === "Paid" ? i.mode ?? "Cash" : null, settled_on: today() }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("fee_fines").update({ status: i.status, mode: i.status === "Paid" ? i.mode ?? "Cash" : null, settled_on: today() }).eq("id", id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }
 
@@ -133,7 +133,7 @@ export async function cancelReceipt(inst: string, id: string, input: unknown) {
   const p = check(await supabaseAdmin.from("fee_payments").select("id, status").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; status: string } | null;
   if (!p) throw new HttpError(404, "Receipt not found.");
   if (p.status !== "Paid") throw new HttpError(409, "Only a valid receipt can be cancelled.");
-  check(await supabaseAdmin.from("fee_payments").update({ status: "Cancelled", cancel_reason: reason, cancelled_on: today() }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("fee_payments").update({ status: "Cancelled", cancel_reason: reason, cancelled_on: today() }).eq("id", id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }
 
@@ -153,7 +153,7 @@ export async function moveRefund(inst: string, id: string, input: unknown) {
   const r = check(await supabaseAdmin.from("fee_refunds").select("id, status").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; status: string } | null;
   if (!r) throw new HttpError(404, "Not found.");
   if (status === "Paid" ? r.status !== "Approved" : r.status !== "Pending") throw new HttpError(409, status === "Paid" ? "Approve the refund before paying it." : "That was already decided.");
-  check(await supabaseAdmin.from("fee_refunds").update(status === "Paid" ? { status, paid_on: today() } : { status, decided_on: today() }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("fee_refunds").update(status === "Paid" ? { status, paid_on: today() } : { status, decided_on: today() }).eq("id", id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }
 

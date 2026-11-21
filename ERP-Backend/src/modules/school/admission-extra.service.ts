@@ -113,7 +113,7 @@ export async function releaseExpired(inst: string) {
     const name = programmeFor(list, a.class_sought, a.details?.stream)?.name;
     const next = all.find((x) => x.status === "Waitlisted" && programmeFor(list, x.class_sought, x.details?.stream)?.name === name);
     if (!next) continue;
-    check(await supabaseAdmin.from("adm_applications").update({ status: "Approved" }).eq("id", next.id).select("id"));
+    check(await supabaseAdmin.from("adm_applications").update({ status: "Approved" }).eq("id", next.id).eq("institution_id", inst).select("id"));
     await createOffer(inst, next.id);
     next.status = "Approved";
     offered++;

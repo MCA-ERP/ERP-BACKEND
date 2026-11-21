@@ -78,9 +78,9 @@ export async function issueBook(inst: string, input: unknown) {
   if (set.block_unpaid && m.fines) throw new HttpError(409, "Unpaid fines block new issues. Collect them first.");
   const from = i.issued_on ?? today(); const due = addDays(from, m.type === "Staff" ? set.days_staff : set.days_student);
   const r = check(await supabaseAdmin.from("lib_issues").insert({ institution_id: inst, copy_id: copy.id, member_id: i.member_id, issued_on: from, due_on: due }).select("id").single());
-  check(await supabaseAdmin.from("lib_copies").update({ status: "Issued" }).eq("id", copy.id).select("id")); await bump(copy.book_id, -1);
+  check(await supabaseAdmin.from("lib_copies").update({ status: "Issued" }).eq("id", copy.id).eq("institution_id", inst).select("id")); await bump(copy.book_id, -1);
   const res = check(await supabaseAdmin.from("lib_reservations").select("id, book_id").eq("institution_id", inst).eq("member_id", i.member_id).eq("book_id", copy.book_id).in("status", ["Waiting", "Ready to collect"])) as { id: string }[];
-  for (const x of res) check(await supabaseAdmin.from("lib_reservations").update({ status: "Issued" }).eq("id", x.id).select("id"));
+  for (const x of res) check(await supabaseAdmin.from("lib_reservations").update({ status: "Issued" }).eq("id", x.id).eq("institution_id", inst).select("id"));
   return { ...(r as unknown as object), due };
 }
 async function getIssue(inst: string, id: string) {
@@ -92,11 +92,11 @@ export async function returnBook(inst: string, id: string) {
   const x = await getIssue(inst, id); const set = await settings(inst); const now = today(); let fine = 0;
   const late = Math.max(0, daysBetween(x.due_on, now));
   if (late > 0) { const rate = (await memberKind(x.member_id)) === "Staff" ? set.late_staff : set.late_student; fine = late * rate; if (set.max_fine !== "No limit" && x.price > 0) fine = Math.min(fine, x.price); }
-  check(await supabaseAdmin.from("lib_issues").update({ status: "Returned", returned_on: now }).eq("id", id).select("id"));
-  check(await supabaseAdmin.from("lib_copies").update({ status: "Available" }).eq("id", x.copy_id).select("id")); await bump(x.book_id, 1);
+  check(await supabaseAdmin.from("lib_issues").update({ status: "Returned", returned_on: now }).eq("id", id).eq("institution_id", inst).select("id"));
+  check(await supabaseAdmin.from("lib_copies").update({ status: "Available" }).eq("id", x.copy_id).eq("institution_id", inst).select("id")); await bump(x.book_id, 1);
   if (fine > 0) check(await supabaseAdmin.from("lib_fines").insert({ institution_id: inst, member_id: x.member_id, issue_id: id, reason: `Late return · ${late} days`, amount: fine }).select("id"));
   const w = check(await supabaseAdmin.from("lib_reservations").select("id").eq("institution_id", inst).eq("book_id", x.book_id).eq("status", "Waiting").order("reserved_on").order("code").limit(1)) as { id: string }[];
-  if (w[0]) check(await supabaseAdmin.from("lib_reservations").update({ status: "Ready to collect" }).eq("id", w[0].id).select("id"));
+  if (w[0]) check(await supabaseAdmin.from("lib_reservations").update({ status: "Ready to collect" }).eq("id", w[0].id).eq("institution_id", inst).select("id"));
   return { late_days: late, fine, reserved_for_next: !!w[0] };
 }
 export async function renew(inst: string, id: string) {
@@ -104,14 +104,14 @@ export async function renew(inst: string, id: string) {
   if (x.renewals >= set.renewals) throw new HttpError(409, `Already renewed ${set.renewals} times.`);
   const waiting = check(await supabaseAdmin.from("lib_reservations").select("id").eq("book_id", x.book_id).in("status", ["Waiting", "Ready to collect"]).limit(1)) as unknown[]; if (waiting.length) throw new HttpError(409, "Someone has reserved this book.");
   const days = (await memberKind(x.member_id)) === "Staff" ? set.days_staff : set.days_student; const from = x.due_on > today() ? x.due_on : today();
-  check(await supabaseAdmin.from("lib_issues").update({ due_on: addDays(from, days), renewals: x.renewals + 1 }).eq("id", id).select("id")); return { due: addDays(from, days) };
+  check(await supabaseAdmin.from("lib_issues").update({ due_on: addDays(from, days), renewals: x.renewals + 1 }).eq("id", id).eq("institution_id", inst).select("id")); return { due: addDays(from, days) };
 }
 export async function markLost(inst: string, id: string) {
   const x = await getIssue(inst, id); const set = await settings(inst); const amount = x.price + (set.lost_rule.includes("₹50") ? 50 : 0);
-  check(await supabaseAdmin.from("lib_issues").update({ status: "Lost", returned_on: today() }).eq("id", id).select("id"));
-  check(await supabaseAdmin.from("lib_copies").update({ status: "Lost" }).eq("id", x.copy_id).select("id")); // the copy stays on record as lost; the book has one fewer
+  check(await supabaseAdmin.from("lib_issues").update({ status: "Lost", returned_on: today() }).eq("id", id).eq("institution_id", inst).select("id"));
+  check(await supabaseAdmin.from("lib_copies").update({ status: "Lost" }).eq("id", x.copy_id).eq("institution_id", inst).select("id")); // the copy stays on record as lost; the book has one fewer
   const b = check(await supabaseAdmin.from("lib_books").select("copies, available").eq("id", x.book_id).single()) as { copies: number; available: number };
-  check(await supabaseAdmin.from("lib_books").update({ copies: Math.max(0, b.copies - 1), available: Math.min(Math.max(0, b.copies - 1), b.available) }).eq("id", x.book_id).select("id"));
+  check(await supabaseAdmin.from("lib_books").update({ copies: Math.max(0, b.copies - 1), available: Math.min(Math.max(0, b.copies - 1), b.available) }).eq("id", x.book_id).eq("institution_id", inst).select("id"));
   if (amount > 0) check(await supabaseAdmin.from("lib_fines").insert({ institution_id: inst, member_id: x.member_id, reason: "Lost book", amount }).select("id"));
   return { fine: amount };
 }

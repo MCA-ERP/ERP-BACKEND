@@ -56,7 +56,7 @@ const needed = (days: number) => (days <= 2 ? 1 : days <= 5 ? 2 : 3);
 export async function leaveApprovals(inst: string) {
   const [rows, st] = await Promise.all([supabaseAdmin.from("leave_requests").select("id, code, profile_id, leave_type, from_date, days, level, level_since, created_at").eq("institution_id", inst).eq("status", "Pending").order("created_at").limit(1000), staffMap(inst)]);
   const now = Date.now(); const R = check(rows) as { id: string; code: string; profile_id: string; leave_type: string; from_date: string; days: number; level: number; level_since: string; created_at: string }[];
-  for (const r of R) if (r.level < 3 && now - Date.parse(r.level_since) > LIMIT_H[r.level - 1] * 3600000) { r.level += 1; r.level_since = new Date().toISOString(); check(await supabaseAdmin.from("leave_requests").update({ level: r.level, level_since: r.level_since }).eq("id", r.id).select("id")); }
+  for (const r of R) if (r.level < 3 && now - Date.parse(r.level_since) > LIMIT_H[r.level - 1] * 3600000) { r.level += 1; r.level_since = new Date().toISOString(); check(await supabaseAdmin.from("leave_requests").update({ level: r.level, level_since: r.level_since }).eq("id", r.id).eq("institution_id", inst).select("id")); }
   const items = R.map((r) => { const hrs = Math.floor((now - Date.parse(r.level_since)) / 3600000); const need = Math.max(needed(Number(r.days)), r.level); return { id: r.id, code: r.code, employee: st.get(r.profile_id)?.name ?? "", detail: [st.get(r.profile_id)?.designation, st.get(r.profile_id)?.department].filter(Boolean).join(" · "), leave: `${r.leave_type} leave`, from: r.from_date, days: Number(r.days), route: SHORT.slice(0, need), level: r.level, waiting: hrs < 48 ? `${hrs} h` : `${Math.floor(hrs / 24)} d`, overdue: hrs > LIMIT_H[r.level - 1] * 0.75, status: `With ${SHORT[r.level - 1]}` }; });
   return { levels: LEVELS.map((label, i) => ({ label: `Level ${i + 1} · ${label}`, count: items.filter((x) => x.level === i + 1).length, overdue: items.filter((x) => x.level === i + 1 && x.overdue).length })), items };
 }
@@ -67,9 +67,9 @@ export async function decideLeaveStep(inst: string, id: string, input: unknown, 
   const allowed = r.level >= 3 ? ["Principal", "InstitutionAdmin"] : ["VicePrincipal", "Principal", "InstitutionAdmin"];
   if (!allowed.includes(role)) throw new HttpError(403, `Only the ${SHORT[r.level - 1].toLowerCase()} can decide this leave now.`);
   const need = needed(Number(r.days));
-  if (action === "send_back") check(await supabaseAdmin.from("leave_requests").update({ status: "Rejected", decided_by: actor ?? null, decided_at: new Date().toISOString() }).eq("id", id).select("id"));
-  else if (r.level >= need) check(await supabaseAdmin.from("leave_requests").update({ status: "Approved", decided_by: actor ?? null, decided_at: new Date().toISOString() }).eq("id", id).select("id"));
-  else check(await supabaseAdmin.from("leave_requests").update({ level: r.level + 1, level_since: new Date().toISOString() }).eq("id", id).select("id"));
+  if (action === "send_back") check(await supabaseAdmin.from("leave_requests").update({ status: "Rejected", decided_by: actor ?? null, decided_at: new Date().toISOString() }).eq("id", id).eq("institution_id", inst).select("id"));
+  else if (r.level >= need) check(await supabaseAdmin.from("leave_requests").update({ status: "Approved", decided_by: actor ?? null, decided_at: new Date().toISOString() }).eq("id", id).eq("institution_id", inst).select("id"));
+  else check(await supabaseAdmin.from("leave_requests").update({ level: r.level + 1, level_since: new Date().toISOString() }).eq("id", id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }
 

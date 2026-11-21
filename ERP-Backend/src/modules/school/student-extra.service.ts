@@ -70,10 +70,10 @@ export async function setRecordStatus(inst: string, id: string, body: unknown) {
       const sec = check(await supabaseAdmin.from("sections").select("id, grade_id, academic_year_id").eq("id", rec.to_ref).maybeSingle()) as { id: string; grade_id: string; academic_year_id: string } | null;
       if (sec) check(await supabaseAdmin.from("student_enrollments").update({ grade_id: sec.grade_id, section_id: sec.id, roll_no: null }).eq("student_id", rec.student_id).eq("academic_year_id", sec.academic_year_id).select("id"));
     } else if (rec.kind === "transfer_campus") {
-      check(await supabaseAdmin.from("students").update({ campus_id: rec.to_ref }).eq("id", rec.student_id).select("id"));
+      check(await supabaseAdmin.from("students").update({ campus_id: rec.to_ref }).eq("id", rec.student_id).eq("institution_id", inst).select("id"));
     }
   }
-  check(await supabaseAdmin.from("stu_records").update({ status }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("stu_records").update({ status }).eq("id", id).eq("institution_id", inst).select("id"));
   return { success: true };
 }
 
@@ -100,9 +100,9 @@ export async function setWithdrawalStatus(inst: string, id: string, body: unknow
   if (status === "Completed" && w.status !== "Approved") throw new HttpError(400, "Approve the request first.");
   if (status !== "Completed" && w.status !== "Pending") throw new HttpError(400, "That request was already decided.");
   if (status === "Completed" && w.dues > 0) throw new HttpError(400, "Clear the dues before completing the withdrawal.");
-  check(await supabaseAdmin.from("stu_withdrawals").update({ status }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("stu_withdrawals").update({ status }).eq("id", id).eq("institution_id", inst).select("id"));
   if (status === "Completed") {
-    check(await supabaseAdmin.from("students").update({ status: "Left" }).eq("id", w.student_id).select("id"));
+    check(await supabaseAdmin.from("students").update({ status: "Left" }).eq("id", w.student_id).eq("institution_id", inst).select("id"));
     await supabaseAdmin.from("student_enrollments").update({ status: "Left" }).eq("student_id", w.student_id).in("status", ["Active"]);
   }
   return { success: true };

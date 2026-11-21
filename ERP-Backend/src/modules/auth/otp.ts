@@ -2,7 +2,7 @@ import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 
 import { supabaseAdmin } from "../../../db/client";
 import { HttpError } from "../../lib/http-error";
 import { emailConfigured, sendEmail } from "../../lib/mailer";
-import { normalizePhone, sendSms, smsConfigured } from "../../lib/sms";
+import { fast2smsConfigured, normalizePhone, sendOtpFast2sms, sendSms, smsConfigured } from "../../lib/sms";
 import { getSetting } from "../admin/settings.service";
 
 export const CODE_TTL_MS = 10 * 60_000;
@@ -42,7 +42,7 @@ export interface Delivery { channel: "sms" | "email" | "console"; sent_to: strin
 /** Whether a code could be delivered at all right now (used before the setting is switched on). */
 export async function deliveryAvailable(): Promise<{ ok: boolean; sms: boolean; email: boolean }> {
   const tpl = (await supabaseAdmin.from("message_templates").select("provider_template_id").eq("key", "login_otp").eq("channel", "sms").eq("is_active", true).maybeSingle()).data as { provider_template_id: string | null } | null;
-  const sms = smsConfigured() && !!tpl?.provider_template_id;
+  const sms = (smsConfigured() && !!tpl?.provider_template_id) || fast2smsConfigured();
   const email = emailConfigured();
   return { ok: sms || email || process.env.NODE_ENV !== "production", sms, email };
 }

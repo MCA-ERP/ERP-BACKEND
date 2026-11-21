@@ -146,7 +146,7 @@ export async function decideCorrection(inst: string, id: string, input: unknown,
     const e = check(await supabaseAdmin.from("student_enrollments").select("section_id").eq("student_id", c.student_id).eq("institution_id", inst).order("created_at", { ascending: false }).limit(1)) as { section_id: string | null }[];
     check(await supabaseAdmin.from("attendance_records").upsert({ institution_id: inst, student_id: c.student_id, section_id: e[0]?.section_id ?? null, att_date: c.att_date, status: c.should_be, marked_by: actor ?? null, updated_at: new Date().toISOString() }, { onConflict: "student_id,att_date" }).select("id"));
   }
-  check(await supabaseAdmin.from("attendance_corrections").update({ status, decided_by: actor ?? null, decided_at: new Date().toISOString() }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("attendance_corrections").update({ status, decided_by: actor ?? null, decided_at: new Date().toISOString() }).eq("id", id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }
 

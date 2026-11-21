@@ -108,7 +108,7 @@ export async function setRegistration(inst: string, id: string, input: unknown) 
   const cur = check(await supabaseAdmin.from("comp_registrations").select("status").eq("id", id).eq("institution_id", inst).maybeSingle()) as { status: string } | null;
   if (!cur) throw new HttpError(404, "Registration not found.");
   if (status === "Admit card issued" && cur.status === "Fee pending") throw new HttpError(409, "The fee is still pending.");
-  check(await supabaseAdmin.from("comp_registrations").update({ status }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("comp_registrations").update({ status }).eq("id", id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }
 export async function remindParent(inst: string, id: string, actor?: string) {

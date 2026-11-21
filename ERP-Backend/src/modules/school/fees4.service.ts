@@ -129,7 +129,7 @@ export async function bankCredit(inst: string, id: string, input: unknown, who: 
   const s = check(await supabaseAdmin.from("fee_settlements").select("id, ref, gross, fee_gst").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; ref: string; gross: number; fee_gst: number } | null;
   if (!s) throw new HttpError(404, "Settlement not found.");
   const status = i.bank_amount === s.gross - s.fee_gst ? "Matched" : "Difference";
-  check(await supabaseAdmin.from("fee_settlements").update({ bank_amount: i.bank_amount, bank_credit_on: i.bank_credit_on, bank_ref: i.bank_ref ?? null, status }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("fee_settlements").update({ bank_amount: i.bank_amount, bank_credit_on: i.bank_credit_on, bank_ref: i.bank_ref ?? null, status }).eq("id", id).eq("institution_id", inst).select("id"));
   await audit(inst, who, status === "Matched" ? "Auto-matched" : "Difference found", s.ref, `Bank credit ${inr(i.bank_amount)} against net ${inr(s.gross - s.fee_gst)}`);
   return { status };
 }
@@ -170,7 +170,7 @@ export async function fixException(inst: string, id: string, input: unknown, who
   let note = "Cleared";
   if (action === "receipt") { if (!x.ref_key.startsWith("norcpt:")) throw new HttpError(400, "That is not a missing receipt."); check(await supabaseAdmin.from("fee_payments").update({ status: "Paid" }).eq("id", x.ref_key.slice(7)).eq("institution_id", inst).select("id")); note = "Receipt created"; }
   if (action === "refund") { if (!x.student_id) throw new HttpError(400, "No student to refund."); check(await supabaseAdmin.from("fee_refunds").insert({ institution_id: inst, student_id: x.student_id, reason: "Paid twice by mistake", amount: x.amount, requested_on: today(), created_by: actor ?? null }).select("id")); note = "Refund requested"; }
-  check(await supabaseAdmin.from("recon_exceptions").update({ status: "Cleared", cleared_on: today() }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("recon_exceptions").update({ status: "Cleared", cleared_on: today() }).eq("id", id).eq("institution_id", inst).select("id"));
   await audit(inst, who, "Exception cleared", x.kind, note);
   return { ok: true };
 }
@@ -196,7 +196,7 @@ export async function uploadStatement(inst: string, input: unknown, who: string)
       const ref = P.find((p) => !used.has(p.id) && p.reference && p.reference.length >= 6 && N.includes(p.reference.toUpperCase()) && p.total === r.money_in && ((p.mode === "Cheque" ? rules.get("cheque") : rules.get("utr")) ?? true));
       const so = S.find((s) => N.includes(s.ref.toUpperCase()) && rules.get("payout") !== false);
       if (ref) { used.add(ref.id); rec = { ...rec, status: "Auto", matched_to: `Receipt ${ref.receipt_no} · ${K.get(ref.student_id) ?? ""}`, rule_note: ref.mode === "Cheque" ? "Cheque number" : "UTR in receipt", journal: journal() }; }
-      else if (so) { check(await supabaseAdmin.from("fee_settlements").update({ bank_amount: r.money_in, bank_credit_on: r.date, bank_ref: r.narration.slice(0, 60), status: r.money_in === so.gross - so.fee_gst ? "Matched" : "Difference" }).eq("id", so.id).select("id")); rec = { ...rec, status: "Auto", matched_to: `Gateway payout ${so.ref} · ${so.payments} payments`, rule_note: "Payout ID", journal: journal() }; }
+      else if (so) { check(await supabaseAdmin.from("fee_settlements").update({ bank_amount: r.money_in, bank_credit_on: r.date, bank_ref: r.narration.slice(0, 60), status: r.money_in === so.gross - so.fee_gst ? "Matched" : "Difference" }).eq("id", so.id).eq("institution_id", inst).select("id")); rec = { ...rec, status: "Auto", matched_to: `Gateway payout ${so.ref} · ${so.payments} payments`, rule_note: "Payout ID", journal: journal() }; }
       else if (rules.get("keyword") !== false && /INT\.? ?CR|INTEREST/.test(N)) rec = { ...rec, status: "Auto", matched_to: "Interest income", rule_note: "Narration keyword", journal: journal() };
       else if (rules.get("name") !== false) { const g = P.find((p) => !used.has(p.id) && p.total === r.money_in && Math.abs(daysBetween(p.paid_on, r.date)) <= 2); if (g) { used.add(g.id); rec = { ...rec, status: "Suggested", matched_to: `Receipt ${g.receipt_no} · ${K.get(g.student_id) ?? ""} (amount and date match, no UTR)`, rule_note: "Amount and date", suggest_payment: g.id }; } }
     } else if (r.money_out > 0) {
@@ -215,7 +215,7 @@ export async function confirmLine(inst: string, id: string, who: string) {
   const l = check(await supabaseAdmin.from("bank_statement_lines").select("id, status, matched_to, money_in").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; status: string; matched_to: string | null; money_in: number } | null;
   if (!l) throw new HttpError(404, "Not found."); if (l.status !== "Suggested") throw new HttpError(409, "Only a suggested match can be confirmed.");
   const j = await nextJournal(inst);
-  check(await supabaseAdmin.from("bank_statement_lines").update({ status: "Manual", journal: j }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("bank_statement_lines").update({ status: "Manual", journal: j }).eq("id", id).eq("institution_id", inst).select("id"));
   await audit(inst, who, "Manually matched", `${inr(l.money_in)}`, l.matched_to ?? "", j);
   return { journal: j };
 }
@@ -317,12 +317,12 @@ export async function moveClaim(inst: string, id: string, input: unknown, role: 
   const c = check(await supabaseAdmin.from("staff_claims").select("id, ctype, amount, status").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; ctype: string; amount: number; status: string } | null;
   if (!c) throw new HttpError(404, "Not found.");
   const rule = (await claimRules(inst)).items.find((r) => r.ctype === c.ctype); const top = ["Principal", "InstitutionAdmin"]; const lead = [...top, "VicePrincipal"];
-  if (action === "pay") { if (c.status !== "Approved") throw new HttpError(409, "Approve the claim before paying it."); if (![...lead, "Accountant", "Finance"].includes(role)) throw new HttpError(403, "Only accounts or the principal can pay a claim."); check(await supabaseAdmin.from("staff_claims").update({ status: "Paid", paid_on: today() }).eq("id", id).select("id")); return { ok: true }; }
+  if (action === "pay") { if (c.status !== "Approved") throw new HttpError(409, "Approve the claim before paying it."); if (![...lead, "Accountant", "Finance"].includes(role)) throw new HttpError(403, "Only accounts or the principal can pay a claim."); check(await supabaseAdmin.from("staff_claims").update({ status: "Paid", paid_on: today() }).eq("id", id).eq("institution_id", inst).select("id")); return { ok: true }; }
   if (!["Submitted", "HOD approved"].includes(c.status)) throw new HttpError(409, "That was already decided.");
   const allowed = c.status === "HOD approved" || c.amount > (rule?.limit_amount ?? 0) || rule?.approver === "Principal" ? top : rule?.approver === "Accountant" ? [...lead, "Accountant"] : lead;
   if (!allowed.includes(role)) throw new HttpError(403, "You can't decide this claim.");
   const next = action === "reject" ? "Rejected" : c.status === "Submitted" && rule?.approver.includes("then") ? "HOD approved" : "Approved";
-  check(await supabaseAdmin.from("staff_claims").update({ status: next }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("staff_claims").update({ status: next }).eq("id", id).eq("institution_id", inst).select("id"));
   return { ok: true, status: next };
 }
 export async function advances(inst: string) {
@@ -338,7 +338,7 @@ export async function settleAdvance(inst: string, id: string, input: unknown) {
   const { amount } = z.object({ amount: z.number().int().min(1).max(10_000_000) }).strict().parse(input);
   const a = check(await supabaseAdmin.from("staff_advances").select("id, given, settled").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; given: number; settled: number } | null;
   if (!a) throw new HttpError(404, "Not found."); if (amount > a.given - a.settled) throw new HttpError(409, `Only ${inr(a.given - a.settled)} is left to settle.`);
-  check(await supabaseAdmin.from("staff_advances").update({ settled: a.settled + amount }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("staff_advances").update({ settled: a.settled + amount }).eq("id", id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }
 void entries;

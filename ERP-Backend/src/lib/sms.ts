@@ -9,6 +9,18 @@ import { HttpError } from "./http-error";
  *   MSG91_BASE_URL   optional, defaults to https://control.msg91.com
  */
 export const smsConfigured = () => Boolean(process.env.MSG91_AUTH_KEY);
+/** Fast2SMS (fast2sms.com): its "otp" route sends a sign-in code without a DLT template. Set FAST2SMS_API_KEY. */
+export const fast2smsConfigured = () => Boolean(process.env.FAST2SMS_API_KEY);
+export async function sendOtpFast2sms(to: string, code: string): Promise<void> {
+  const mobile = normalizePhone(to);
+  if (!mobile || !mobile.startsWith("91")) throw new Error("Fast2SMS sends to Indian mobile numbers only.");
+  const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const res = await fetch("https://www.fast2sms.com/dev/bulkV2", { method: "POST", headers: { authorization: process.env.FAST2SMS_API_KEY!, "Content-Type": "application/json" }, body: JSON.stringify({ route: "otp", variables_values: code, numbers: mobile.slice(2), flash: 0 }), signal: controller.signal });
+    const body = (await res.json().catch(() => ({}))) as { return?: boolean; message?: string | string[] };
+    if (!res.ok || body.return === false) throw new Error(Array.isArray(body.message) ? body.message.join(" ") : body.message || `Fast2SMS answered ${res.status}.`);
+  } finally { clearTimeout(timer); }
+}
 
 const BASE = () => (process.env.MSG91_BASE_URL || "https://control.msg91.com").replace(/\/$/, "");
 

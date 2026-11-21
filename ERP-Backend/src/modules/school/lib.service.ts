@@ -81,15 +81,15 @@ export async function addCopies(inst: string, input: unknown) {
   const b = check(await supabaseAdmin.from("lib_books").select("copies, available").eq("id", i.book_id).single()) as { copies: number; available: number };
   // copies already counted on the book but never given an accession number are kept, so the total only grows
   const rows = check(await supabaseAdmin.from("lib_copies").insert(Array.from({ length: i.count }, () => ({ institution_id: inst, book_id: i.book_id, shelf: i.shelf ?? "", call_no: i.call_no ?? "" }))).select("id, accession_no")) as { id: string; accession_no: string }[];
-  for (const r of rows) check(await supabaseAdmin.from("lib_copies").update({ barcode: `BG${r.accession_no}` }).eq("id", r.id).select("id"));
-  check(await supabaseAdmin.from("lib_books").update({ copies: Math.max(b.copies, have.length) + i.count, available: Math.min(Math.max(b.copies, have.length) + i.count, b.available + i.count) }).eq("id", i.book_id).select("id"));
+  for (const r of rows) check(await supabaseAdmin.from("lib_copies").update({ barcode: `BG${r.accession_no}` }).eq("id", r.id).eq("institution_id", inst).select("id"));
+  check(await supabaseAdmin.from("lib_books").update({ copies: Math.max(b.copies, have.length) + i.count, available: Math.min(Math.max(b.copies, have.length) + i.count, b.available + i.count) }).eq("id", i.book_id).eq("institution_id", inst).select("id"));
   return { added: rows.length, first: rows[0]?.accession_no };
 }
 export async function setCopy(inst: string, id: string, input: unknown) {
   const i = z.object({ status: z.enum(["Available", "Issued"]).optional(), shelf: z.string().trim().max(30).optional(), call_no: z.string().trim().max(40).optional() }).strict().parse(input);
   const c = check(await supabaseAdmin.from("lib_copies").select("id, book_id, status").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; book_id: string; status: string } | null; if (!c) throw new HttpError(404, "Not found.");
-  check(await supabaseAdmin.from("lib_copies").update(i).eq("id", id).select("id"));
-  if (i.status && i.status !== c.status) { const b = check(await supabaseAdmin.from("lib_books").select("copies, available").eq("id", c.book_id).single()) as { copies: number; available: number }; check(await supabaseAdmin.from("lib_books").update({ available: Math.max(0, Math.min(b.copies, b.available + (i.status === "Issued" ? -1 : 1))) }).eq("id", c.book_id).select("id")); }
+  check(await supabaseAdmin.from("lib_copies").update(i).eq("id", id).eq("institution_id", inst).select("id"));
+  if (i.status && i.status !== c.status) { const b = check(await supabaseAdmin.from("lib_books").select("copies, available").eq("id", c.book_id).single()) as { copies: number; available: number }; check(await supabaseAdmin.from("lib_books").update({ available: Math.max(0, Math.min(b.copies, b.available + (i.status === "Issued" ? -1 : 1))) }).eq("id", c.book_id).eq("institution_id", inst).select("id")); }
   return { ok: true };
 }
 void syncBook;

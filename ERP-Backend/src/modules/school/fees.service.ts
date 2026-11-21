@@ -338,7 +338,7 @@ export async function decideConcession(inst: string, id: string, input: unknown)
   if (!c) throw new HttpError(404, "Not found.");
   if (!["Pending", "Under review", "Info asked"].includes(c.status)) throw new HttpError(409, "That was already decided.");
   if (status === "Approved") { const { plan } = await planOf(inst, c.student_id); check(await supabaseAdmin.from("student_fee_plans").upsert({ student_id: c.student_id, institution_id: inst, group_id: plan.group_id, transport_id: plan.transport_id, hostel_id: plan.hostel_id, concession_pct: plan.concession_pct, concession_amount: plan.concession_amount + c.amount, updated_at: new Date().toISOString() }, { onConflict: "student_id" }).select("student_id")); }
-  check(await supabaseAdmin.from("fee_concessions").update({ status }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("fee_concessions").update({ status }).eq("id", id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }
 export async function newAdmissions(inst: string) {

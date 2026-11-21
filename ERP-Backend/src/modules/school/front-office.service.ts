@@ -241,7 +241,7 @@ export async function convertEnquiry(inst: string, id: string, actor?: string) {
   if (!e) throw new HttpError(404, "Enquiry not found.");
   if (e.status === "Converted") throw new HttpError(409, "That enquiry was already converted.");
   const app = check(await supabaseAdmin.from("adm_applications").insert({ institution_id: inst, child: e.child, class_sought: e.class_sought, parent_name: e.parent_name, mobile: e.mobile, source: e.source, enquiry_id: id, created_by: actor ?? null }).select(REGISTERS["adm-applications"].select).single()) as unknown as Record<string, unknown>;
-  check(await supabaseAdmin.from("adm_enquiries").update({ status: "Converted" }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("adm_enquiries").update({ status: "Converted" }).eq("id", id).eq("institution_id", inst).select("id"));
   return app;
 }
 
@@ -301,7 +301,7 @@ export async function collectAdmissionFee(inst: string, body: unknown, actor?: s
   const fees = (await feeSetup(inst)).rows;
   const fee = fees[Math.min(groupOf(app.class_sought), fees.length - 1)];
   const pay = check(await supabaseAdmin.from("adm_fee_payments").insert({ institution_id: inst, application_id, admission_fee: fee.admission_fee, caution: fee.caution, mode, created_by: actor ?? null }).select(REGISTERS["adm-fee-payments"].select).single()) as unknown as Record<string, unknown>;
-  check(await supabaseAdmin.from("adm_applications").update({ status: "Fee paid" }).eq("id", application_id).select("id"));
+  check(await supabaseAdmin.from("adm_applications").update({ status: "Fee paid" }).eq("id", application_id).eq("institution_id", inst).select("id"));
   return shape("fee", pay);
 }
 
@@ -315,7 +315,7 @@ export async function generateAdmissionNumber(inst: string, id: string) {
   const used = check(await supabaseAdmin.from("adm_applications").select("admission_no").eq("institution_id", inst).not("admission_no", "is", null)) as { admission_no: string }[];
   const next = Math.max(1000, ...used.map((u) => Number(u.admission_no.split("/").pop()) || 0)) + 1;
   const no = `${(school?.code ?? "ADM").slice(0, 6)}/${new Date().getFullYear() + 1}/${next}`;
-  return check(await supabaseAdmin.from("adm_applications").update({ admission_no: no, status: "Registered" }).eq("id", id).select(REGISTERS["adm-applications"].select).single());
+  return check(await supabaseAdmin.from("adm_applications").update({ admission_no: no, status: "Registered" }).eq("id", id).eq("institution_id", inst).select(REGISTERS["adm-applications"].select).single());
 }
 
 export async function approvalLevels(inst: string) {
@@ -336,7 +336,7 @@ export async function advance(inst: string, id: string, body: unknown) {
     if (app.status !== "Under review") throw new HttpError(400, "That application is not waiting for a decision.");
     update = action === "approve" ? (app.level >= 3 ? { status: "Approved" } : { level: app.level + 1, level_since: now }) : action === "send-back" ? { status: "Returned" } : action === "waitlist" ? { status: "Waitlisted" } : { status: "Rejected" };
   }
-  const row = check(await supabaseAdmin.from("adm_applications").update(update).eq("id", id).select(REGISTERS["adm-applications"].select).single());
+  const row = check(await supabaseAdmin.from("adm_applications").update(update).eq("id", id).eq("institution_id", inst).select(REGISTERS["adm-applications"].select).single());
   if (update.status === "Approved") await createOffer(inst, id);
   return row;
 }
@@ -391,8 +391,8 @@ export async function allocate(inst: string, id: string, body: unknown) {
     const g = check(await supabaseAdmin.from("guardians").insert({ institution_id: inst, full_name: app.parent_name, phone: app.mobile ?? "-", email: app.details?.email || null, occupation: app.details?.occupation || null }).select("id").single()) as { id: string };
     check(await supabaseAdmin.from("student_guardians").insert({ student_id: student.id, guardian_id: g.id, relation: app.details?.relation || "Parent", is_primary_contact: true }).select("student_id"));
   } catch (err) {
-    await supabaseAdmin.from("students").delete().eq("id", student.id);
+    await supabaseAdmin.from("students").delete().eq("id", student.id).eq("institution_id", inst);
     throw err;
   }
-  return check(await supabaseAdmin.from("adm_applications").update({ status: "Allocated" }).eq("id", id).select(REGISTERS["adm-applications"].select).single());
+  return check(await supabaseAdmin.from("adm_applications").update({ status: "Allocated" }).eq("id", id).eq("institution_id", inst).select(REGISTERS["adm-applications"].select).single());
 }

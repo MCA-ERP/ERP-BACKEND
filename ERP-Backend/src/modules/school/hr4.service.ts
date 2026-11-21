@@ -33,7 +33,7 @@ export async function decideExit(inst: string, id: string, input: unknown) {
   const { status } = z.object({ status: z.enum(["Approved", "Rejected"]) }).strict().parse(input);
   const x = check(await supabaseAdmin.from("hr_exits").select("id, staff_id, status").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; staff_id: string; status: string } | null;
   if (!x) throw new HttpError(404, "Not found."); if (x.status !== "Pending") throw new HttpError(409, "That was already decided.");
-  check(await supabaseAdmin.from("hr_exits").update({ status }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("hr_exits").update({ status }).eq("id", id).eq("institution_id", inst).select("id"));
   if (status === "Approved") {
     const s = (await staffMap(inst)).get(x.staff_id); const drives = /driver|bus|attendant/i.test(s?.designation ?? "");
     check(await supabaseAdmin.from("hr_clearance").upsert(DEPTS.map((dept) => ({ exit_id: id, dept, state: dept === "Transport" && !drives ? "n/a" : "Pending" })), { onConflict: "exit_id,dept" }).select("exit_id"));
@@ -45,7 +45,7 @@ export async function relieve(inst: string, id: string) {
   if (!x) throw new HttpError(404, "Not found."); if (x.status !== "Approved") throw new HttpError(409, "Only an approved exit can be relieved.");
   const c = check(await supabaseAdmin.from("hr_clearance").select("state").eq("exit_id", id)) as { state: string }[];
   if (c.some((y) => y.state === "Pending")) throw new HttpError(409, "Every department must clear the leaver first.");
-  check(await supabaseAdmin.from("hr_exits").update({ status: "Relieved" }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("hr_exits").update({ status: "Relieved" }).eq("id", id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }
 export async function clearance(inst: string) {
@@ -176,7 +176,7 @@ export async function moveVacancy(inst: string, id: string, input: unknown, role
   else if (action === "reject") { if (!["Requested", "Principal OK"].includes(v.stage)) throw new HttpError(409, "Too late to reject."); next = "Rejected"; }
   else if (action === "post") { if (v.stage !== "Approved") throw new HttpError(409, "Approve it first."); next = "Posted"; }
   else { if (v.stage !== "Posted") throw new HttpError(409, "Post it first."); next = "Filled"; }
-  check(await supabaseAdmin.from("hr_vacancies").update({ stage: next }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("hr_vacancies").update({ stage: next }).eq("id", id).eq("institution_id", inst).select("id"));
   return { stage: next };
 }
 export async function sanctioned(inst: string) {

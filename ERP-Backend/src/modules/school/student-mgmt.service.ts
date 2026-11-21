@@ -74,7 +74,7 @@ export async function updateStudent(inst: string, id: string, part: string, body
   };
   if (part === "personal") {
     const i = PERSONAL.parse(body);
-    check(await supabaseAdmin.from("students").update({ first_name: i.first_name, last_name: i.last_name, gender: blank(i.gender), date_of_birth: blank(i.date_of_birth), updated_at: now }).eq("id", id).select("id"));
+    check(await supabaseAdmin.from("students").update({ first_name: i.first_name, last_name: i.last_name, gender: blank(i.gender), date_of_birth: blank(i.date_of_birth), updated_at: now }).eq("id", id).eq("institution_id", inst).select("id"));
     await upsert({ date_of_birth: blank(i.date_of_birth), ...(i.gender ? { gender: i.gender } : {}), blood_group: blank(i.blood_group), religion: blank(i.religion), category: i.category || "General", aadhaar_last4: blank(i.aadhaar_last4), house: blank(i.house) });
   } else if (part === "academic") {
     const i = ACADEMIC.parse(body);
@@ -167,8 +167,8 @@ export async function assign(inst: string, id: string, body: unknown) {
   if (clash.length) throw new HttpError(409, "That roll number is already used in the section.");
   const cur = (await enrolments(inst, y.id)).find((e) => e.student_id === id);
   if (!cur) throw new HttpError(404, "That student is not enrolled this year.");
-  check(await supabaseAdmin.from("student_enrollments").update({ grade_id: i.grade_id, section_id: i.section_id, roll_no: i.roll_no, updated_at: new Date().toISOString() }).eq("id", cur.id).select("id"));
-  check(await supabaseAdmin.from("students").update({ roll_no: i.roll_no }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("student_enrollments").update({ grade_id: i.grade_id, section_id: i.section_id, roll_no: i.roll_no, updated_at: new Date().toISOString() }).eq("id", cur.id).eq("institution_id", inst).select("id"));
+  check(await supabaseAdmin.from("students").update({ roll_no: i.roll_no }).eq("id", id).eq("institution_id", inst).select("id"));
   return { success: true };
 }
 
@@ -214,7 +214,7 @@ export async function promote(inst: string, body: unknown, actor?: string) {
     if (had) { skipped.push(`${row(e).name}: already placed`); continue; }
     const sec = S.find((x) => x.grade_id === next.id && x.name === (one(e.sections)?.name ?? "")) ?? null;
     const n = check(await supabaseAdmin.from("student_enrollments").insert({ institution_id: inst, student_id: sid, academic_year_id: i.target_year_id, grade_id: next.id, section_id: sec?.id ?? null, roll_no: null }).select("id").single()) as { id: string };
-    check(await supabaseAdmin.from("student_enrollments").update({ status: "Promoted" }).eq("id", e.id).select("id"));
+    check(await supabaseAdmin.from("student_enrollments").update({ status: "Promoted" }).eq("id", e.id).eq("institution_id", inst).select("id"));
     check(await supabaseAdmin.from("student_promotions").insert({ institution_id: inst, student_id: sid, from_enrollment_id: e.id, to_enrollment_id: n.id, action: "Promoted", decided_by: actor ?? null }).select("id"));
     done++;
   }

@@ -34,6 +34,18 @@ const PORT = process.env.PORT || 5000;
 // Behind a reverse proxy you control, trust one hop so client addresses (rate limits, IP allowlist) are real.
 if (process.env.TRUST_PROXY === "true") app.set("trust proxy", 1);
 app.disable("x-powered-by");
+// Production safety checks: refuse to start with settings that would expose the API.
+if (process.env.NODE_ENV === "production") {
+  const problems: string[] = [];
+  const origins = (process.env.CORS_ORIGIN || "").split(",").map((o) => o.trim()).filter(Boolean);
+  if (!origins.length) problems.push("CORS_ORIGIN is empty");
+  if (origins.some((o) => o === "*" || !o.startsWith("https://"))) problems.push("CORS_ORIGIN must list https:// origins only, never *");
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY || /^(secret|changeme|test|dev)/i.test(process.env.SUPABASE_SERVICE_ROLE_KEY)) problems.push("SUPABASE_SERVICE_ROLE_KEY is missing or weak");
+  if (process.env.DEBUG === "true") problems.push("DEBUG must not be true");
+  if (problems.length) { console.error("Refusing to start in production: " + problems.join("; ")); process.exit(1); }
+  // HTTPS only (the proxy sets X-Forwarded-Proto); health checks stay reachable.
+  app.use((req, res, next) => { if (req.path === "/health" || req.secure || req.headers["x-forwarded-proto"] === "https") return next(); return res.redirect(308, "https://" + req.headers.host + req.originalUrl); });
+}
 
 app.use(securityHeaders);
 app.use(cors(corsOptions));

@@ -46,7 +46,7 @@ export async function addHostel(inst: string, input: unknown) {
       check(await supabaseAdmin.from("hostel_beds").insert(made.flatMap((r) => Array.from({ length: r.beds }, (_, k) => ({ institution_id: inst, room_id: r.id, label: `${r.code}-${k + 1}`, seq: k + 1 })))).select("id"));
     }
     for (const t of types) await supabaseAdmin.from("hostel_room_types").upsert({ institution_id: inst, name: t }, { onConflict: "institution_id,name", ignoreDuplicates: true });
-  } catch (e) { await supabaseAdmin.from("hostels").delete().eq("id", h.id); throw e; }
+  } catch (e) { await supabaseAdmin.from("hostels").delete().eq("id", h.id).eq("institution_id", inst); throw e; }
   return h;
 }
 export async function buildings(inst: string) {
@@ -62,7 +62,7 @@ export async function rooms(inst: string) {
 export async function setMaintenance(inst: string, id: string, input: unknown) {
   const { maintenance } = z.object({ maintenance: z.boolean() }).strict().parse(input); const s = await load(inst); const r = s.rooms.find((x) => x.id === id); if (!r) throw new HttpError(404, "Not found.");
   if (maintenance && occ(s, id) > 0) throw new HttpError(409, "Move the students out of this room first.");
-  check(await supabaseAdmin.from("hostel_rooms").update({ maintenance }).eq("id", id).select("id")); return { ok: true };
+  check(await supabaseAdmin.from("hostel_rooms").update({ maintenance }).eq("id", id).eq("institution_id", inst).select("id")); return { ok: true };
 }
 export async function editRoomType(inst: string, name: string, input: unknown) {
   const i = z.object({ fee_per_year: z.number().int().min(0).max(10_000_000).nullable(), for_classes: z.string().trim().max(40) }).strict().parse(input);
@@ -90,7 +90,7 @@ export async function allocate(inst: string, input: unknown) {
 }
 export async function allocationAction(inst: string, id: string, input: unknown) {
   const i = z.object({ action: z.enum(["vacate", "request_transfer", "approve_transfer", "cancel_transfer", "set_plan"]), bed_id: uid.optional(), meal_plan_id: uid.nullable().optional() }).strict().parse(input); const s = await load(inst); const a = s.allocs.find((x) => x.id === id); if (!a) throw new HttpError(404, "Not found.");
-  const up = async (row: object) => { check(await supabaseAdmin.from("hostel_allocations").update(row).eq("id", id).select("id")); return { ok: true }; };
+  const up = async (row: object) => { check(await supabaseAdmin.from("hostel_allocations").update(row).eq("id", id).eq("institution_id", inst).select("id")); return { ok: true }; };
   if (i.action === "vacate") return up({ status: "Vacated", transfer_bed_id: null });
   if (i.action === "set_plan") { if (i.meal_plan_id && !check(await supabaseAdmin.from("hostel_meal_plans").select("id").eq("id", i.meal_plan_id).eq("institution_id", inst).maybeSingle())) throw new HttpError(404, "Plan not found."); return up({ meal_plan_id: i.meal_plan_id ?? null }); }
   if (i.action === "request_transfer") { if (!i.bed_id) throw new HttpError(400, "Pick the new bed."); const b = s.beds.find((x) => x.id === i.bed_id); if (!b || s.allocs.some((x) => x.bed_id === i.bed_id) || s.rooms.find((r) => r.id === b.room_id)?.maintenance) throw new HttpError(409, "That bed is not free."); if (a.status === "Transfer requested") throw new HttpError(409, "A transfer is already requested."); return up({ status: "Transfer requested", transfer_bed_id: i.bed_id }); }
@@ -117,7 +117,7 @@ export async function recordOut(inst: string, input: unknown) {
   const i = z.object({ student_id: uid, kind: z.enum(["Home leave", "Outing"]), reason: z.string().trim().min(2, "Give the reason.").max(80), out_time: z.string().regex(/^\d{2}:\d{2}$/).optional() }).strict().parse(input); const s = await load(inst); const a = s.allocs.find((x) => x.student_id === i.student_id); if (!a) throw new HttpError(404, "That student is not in the hostel.");
   if ((check(await supabaseAdmin.from("hostel_attendance").select("id").eq("institution_id", inst).eq("student_id", i.student_id).eq("status", "Out")) as unknown[]).length) throw new HttpError(409, "That student is already out.");
   check(await supabaseAdmin.from("hostel_attendance").insert({ institution_id: inst, student_id: i.student_id, att_date: today(), kind: i.kind, out_time: i.out_time ?? nowHm(), reason: i.reason, status: "Out" }).select("id"));
-  if (i.kind === "Home leave") check(await supabaseAdmin.from("hostel_allocations").update({ status: "On home leave" }).eq("id", a.id).select("id")); return { ok: true };
+  if (i.kind === "Home leave") check(await supabaseAdmin.from("hostel_allocations").update({ status: "On home leave" }).eq("id", a.id).eq("institution_id", inst).select("id")); return { ok: true };
 }
 export async function markReturned(inst: string, id: string) {
   const e = check(await supabaseAdmin.from("hostel_attendance").update({ status: "Returned", in_time: nowHm() }).eq("id", id).eq("institution_id", inst).eq("status", "Out").select("student_id")) as { student_id: string }[]; if (!e.length) throw new HttpError(409, "Already back.");

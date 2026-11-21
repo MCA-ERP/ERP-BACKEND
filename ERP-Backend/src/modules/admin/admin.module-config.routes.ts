@@ -58,3 +58,14 @@ moduleConfigRouter.patch(
   "/module-config/releases/:id",
   h(async (req, res) => res.json({ release: await cfg.updateRelease(uuid(req), z.object({ status: z.enum(["planned", "rolling_out", "live", "rolled_back"]), rollout_percent: z.number().int().min(0).max(100), notes: z.string().trim().min(3).max(5000) }).partial().strict().parse(req.body)) }))
 );
+
+// Integrations the school portals rely on (bank feed, Tally, RFID, statutory filing, online classes, AI). Status is set by Super Admin.
+moduleConfigRouter.get("/module-config/integrations", h(async (_req, res) => {
+  const { supabaseAdmin } = await import("../../../db/client");
+  const r = await supabaseAdmin.from("platform_integrations").select("key, name, category, notes, status").order("sort_order"); if (r.error) throw new Error(r.error.message); res.json({ items: r.data });
+}));
+moduleConfigRouter.patch("/module-config/integrations/:key", h(async (req, res) => {
+  const { supabaseAdmin } = await import("../../../db/client");
+  const k = z.string().regex(/^[a-z0-9_]{1,40}$/).parse(req.params.key); const { status, notes } = z.object({ status: z.enum(["not_configured", "configured", "live"]), notes: z.string().trim().max(200).optional() }).strict().parse(req.body);
+  const r = await supabaseAdmin.from("platform_integrations").update({ status, ...(notes !== undefined ? { notes } : {}), updated_at: new Date().toISOString() }).eq("key", k).select("key"); if (r.error) throw new Error(r.error.message); if (!r.data?.length) { res.status(404).json({ error: "Not found." }); return; } res.json({ ok: true });
+}));

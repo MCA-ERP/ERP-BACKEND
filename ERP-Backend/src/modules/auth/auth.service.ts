@@ -135,7 +135,7 @@ export async function loginUser(payload: LoginPayload, ctx: LoginContext = { ip:
   }
 
   // second step: platform staff (when required) and anyone who turned it on enter a code sent to their phone
-  if (profile && !opts.skipCode && (await codeRequiredFor(profile, roleData.name)) && !(await deviceTrusted(profile.id, payload.deviceToken))) {
+  if (profile && !opts.skipCode && (await codeRequiredFor(profile, roleData.name)) && (process.env.OTP_REQUIRED_ALL === "true" && process.env.NODE_ENV !== "production" ? true : !(await deviceTrusted(profile.id, payload.deviceToken)))) {
     // the password was right, but no session is handed out until the code is entered
     await supabaseAdmin.auth.admin.signOut(data.session.access_token, "local").catch(() => undefined);
     return startChallenge(email, profile, ctx);
@@ -215,6 +215,7 @@ export async function listRoles(): Promise<RoleItem[]> {
 
 // ═════════════ sign-in codes ═════════════
 async function codeRequiredFor(profile: { id: string; institution_id: string | null; otp_enabled: boolean }, roleName?: string): Promise<boolean> {
+  if (process.env.OTP_REQUIRED_ALL === "true" && process.env.NODE_ENV !== "production") return true; // testing: every user must enter a code
   if (profile.otp_enabled) return true;
   if (profile.institution_id) return roleName === "InstitutionAdmin" && getSetting<boolean>("security.require_2fa_school_admins", false);
   return getSetting<boolean>("security.require_2fa_staff", false);

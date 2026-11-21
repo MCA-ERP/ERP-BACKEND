@@ -78,7 +78,7 @@ export async function addScan(inst: string, input: unknown) {
     if (recent.length) { result = "Duplicate"; note = "Tapped twice within 5 minutes"; }
   }
   check(await supabaseAdmin.from("scans").insert({ institution_id: inst, student_id: i.student_id, device_id: i.device_id ?? null, how: i.how, direction: i.direction, result, note: note || null }).select("id"));
-  if (i.device_id) check(await supabaseAdmin.from("rfid_devices").update({ last_sync: new Date().toISOString(), status: "Online" }).eq("id", i.device_id).select("id"));
+  if (i.device_id) check(await supabaseAdmin.from("rfid_devices").update({ last_sync: new Date().toISOString(), status: "Online" }).eq("id", i.device_id).eq("institution_id", inst).select("id"));
   return { result, note };
 }
 
@@ -176,7 +176,7 @@ export async function decideLeave(inst: string, who: "student" | "staff", id: st
   const l = check(await supabaseAdmin.from("student_leaves").select("id, student_id, from_date, to_date, status").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; student_id: string; from_date: string; to_date: string; status: string } | null;
   if (!l) throw new HttpError(404, "Leave application not found.");
   if (l.status !== "Pending") throw new HttpError(409, "That leave isn't waiting for a decision.");
-  check(await supabaseAdmin.from("student_leaves").update({ status, decided_by: actor ?? null }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("student_leaves").update({ status, decided_by: actor ?? null }).eq("id", id).eq("institution_id", inst).select("id"));
   if (status === "Approved") {
     const days = nonSundays(l.from_date, l.to_date).filter((d) => d <= istDate());
     if (days.length) {

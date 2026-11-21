@@ -277,7 +277,7 @@ export async function autoView(inst: string) {
 export async function toggleLock(inst: string, id: string) {
   const s = check(await supabaseAdmin.from("tt_slots").select("id, locked, subject_id").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; locked: boolean; subject_id: string | null } | null;
   if (!s) throw new HttpError(404, "Period not found.");
-  check(await supabaseAdmin.from("tt_slots").update({ locked: !s.locked }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("tt_slots").update({ locked: !s.locked }).eq("id", id).eq("institution_id", inst).select("id"));
   return { locked: !s.locked };
 }
 
