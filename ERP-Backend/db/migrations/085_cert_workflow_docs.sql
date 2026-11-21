@@ -1,0 +1,7 @@
+-- Certificates get a request/approve/issue workflow (Transfer and Custom added); document repository.
+ALTER TABLE public.certificates DROP CONSTRAINT IF EXISTS certificates_kind_check;
+ALTER TABLE public.certificates ADD CONSTRAINT certificates_kind_check CHECK (kind IN ('Bonafide', 'Study', 'Conduct', 'Character', 'Transfer', 'Custom'));
+ALTER TABLE public.certificates ADD COLUMN status VARCHAR(10) NOT NULL DEFAULT 'Issued' CHECK (status IN ('Pending', 'Approved', 'Issued', 'Rejected')), ADD COLUMN requested_on DATE NOT NULL DEFAULT CURRENT_DATE;
+UPDATE public.certificates SET requested_on = issued_on;
+CREATE TABLE public.repo_documents (id UUID PRIMARY KEY DEFAULT uuid_generate_v4(), institution_id UUID NOT NULL REFERENCES public.institutions(id) ON DELETE CASCADE, owner_kind VARCHAR(8) NOT NULL CHECK (owner_kind IN ('Student', 'Staff')), student_id UUID REFERENCES public.students(id) ON DELETE CASCADE, staff_id UUID REFERENCES public.user_profiles(id) ON DELETE CASCADE, doc_type VARCHAR(40) NOT NULL, file_name VARCHAR(120) NOT NULL DEFAULT '', uploaded_on DATE NOT NULL DEFAULT CURRENT_DATE, valid_until DATE, status VARCHAR(14) NOT NULL DEFAULT 'Pending review' CHECK (status IN ('Verified', 'Pending review', 'Missing')), CHECK ((owner_kind = 'Student' AND student_id IS NOT NULL) OR (owner_kind = 'Staff' AND staff_id IS NOT NULL)));
+ALTER TABLE public.repo_documents ENABLE ROW LEVEL SECURITY;

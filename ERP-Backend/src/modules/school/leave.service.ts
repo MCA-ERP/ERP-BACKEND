@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { leavePolicy } from "./hr3.service";
 import { supabaseAdmin } from "../../../db/client";
 import { check } from "../../lib/db";
 import { HttpError } from "../../lib/http-error";
@@ -78,7 +79,8 @@ export async function apply(inst: string, profileId: string, body: unknown) {
   if (half && input.leave_type === "Earned") throw new HttpError(400, "Half days are only for casual and sick leave.");
   const days = countDays(input.from_date, input.to_date, half);
   if (days <= 0) throw new HttpError(400, "Those dates are all Sundays. Nothing to apply for.");
-  if (input.leave_type === "Earned" && input.from_date < day(new Date(Date.now() + 7 * 86_400_000))) throw new HttpError(400, "Earned leave needs 7 days' notice.");
+  const notice = (await leavePolicy(inst)).earned_notice;
+  if (input.leave_type === "Earned" && input.from_date < day(new Date(Date.now() + notice * 86_400_000))) throw new HttpError(400, `Earned leave needs ${notice} days' notice.`);
   if (input.leave_type !== "Sick" && !input.reason?.trim()) throw new HttpError(400, "Give a reason.");
 
   const clash = check(await supabaseAdmin.from("leave_requests").select("id").eq("profile_id", profileId).in("status", ["Pending", "Approved"]).lte("from_date", input.to_date).gte("to_date", input.from_date).limit(1)) as unknown[];
