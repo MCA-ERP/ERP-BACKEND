@@ -36,8 +36,8 @@ export async function saveAttSettings(inst: string, input: unknown) {
 }
 
 // ═════════════ bell schedule ═════════════
-interface Period { id: string; label: string; starts: string; ends: string; kind: "Teaching" | "Break" }
-async function periods(inst: string): Promise<Period[]> {
+export interface Period { id: string; label: string; starts: string; ends: string; kind: "Teaching" | "Break" }
+export async function periods(inst: string): Promise<Period[]> {
   return (check(await supabaseAdmin.from("tt_periods").select("id, label, starts, ends, kind").eq("institution_id", inst).order("starts")) as unknown as Period[]).map((p) => ({ ...p, starts: p.starts.slice(0, 5), ends: p.ends.slice(0, 5) }));
 }
 export async function listPeriods(inst: string) { return { items: await periods(inst) }; }
@@ -61,11 +61,11 @@ export async function defaultPeriods(inst: string) {
   return { added: rows.length };
 }
 
-async function weekDays(inst: string) {
+export async function weekDays(inst: string) {
   const s = check(await supabaseAdmin.from("calendar_settings").select("school_week").eq("institution_id", inst).maybeSingle()) as { school_week: string } | null;
   return s?.school_week === "Monday – Friday" ? 5 : 6;
 }
-async function currentSections(inst: string) {
+export async function currentSections(inst: string) {
   const y = check(await supabaseAdmin.from("academic_years").select("id, name").eq("institution_id", inst).eq("is_current", true).maybeSingle()) as { id: string; name: string } | null;
   if (!y) throw new HttpError(409, "Activate an academic year first.");
   const rows = check(await supabaseAdmin.from("sections").select("id, name, grade_id, grades:grade_id(name, sort_order)").eq("institution_id", inst).eq("academic_year_id", y.id).eq("is_active", true)) as unknown as { id: string; name: string; grade_id: string; grades: { name: string; sort_order: number } | { name: string; sort_order: number }[] | null }[];
@@ -73,13 +73,13 @@ async function currentSections(inst: string) {
 }
 
 // ═════════════ shared lookups ═════════════
-interface Slot { id: string; section_id: string; day: number; period_id: string; subject_id: string | null; teacher_id: string | null; locked: boolean }
-async function allSlots(inst: string) { return check(await supabaseAdmin.from("tt_slots").select("id, section_id, day, period_id, subject_id, teacher_id, locked").eq("institution_id", inst).limit(50000)) as unknown as Slot[]; }
-async function teacherNames(inst: string) {
+export interface Slot { id: string; section_id: string; day: number; period_id: string; subject_id: string | null; teacher_id: string | null; locked: boolean }
+export async function allSlots(inst: string) { return check(await supabaseAdmin.from("tt_slots").select("id, section_id, day, period_id, subject_id, teacher_id, locked").eq("institution_id", inst).limit(50000)) as unknown as Slot[]; }
+export async function teacherNames(inst: string) {
   const r = check(await supabaseAdmin.from("user_profiles").select("id, first_name, last_name").eq("institution_id", inst).limit(2000)) as { id: string; first_name: string; last_name: string }[];
   return new Map(r.map((x) => [x.id, `${x.first_name} ${x.last_name}`.trim()]));
 }
-async function subjectNames(inst: string) {
+export async function subjectNames(inst: string) {
   const r = check(await supabaseAdmin.from("subjects").select("id, name").eq("institution_id", inst).eq("is_active", true).order("name")) as { id: string; name: string }[];
   return r;
 }
@@ -89,11 +89,11 @@ async function gradeSubjects(inst: string) {
   for (const x of r) m.set(x.grade_id, [...(m.get(x.grade_id) ?? []), x.subject_id]);
   return m;
 }
-async function candidates(inst: string) {
+export async function candidates(inst: string) {
   const r = check(await supabaseAdmin.from("teacher_subjects").select("teacher_id, subject_id, section_id, periods").eq("institution_id", inst).limit(5000)) as { teacher_id: string; subject_id: string; section_id: string | null; periods: number }[];
   return r;
 }
-const teachersFor = (c: Awaited<ReturnType<typeof candidates>>, subject: string, section: string) => [...new Set(c.filter((x) => x.subject_id === subject && (x.section_id === section || x.section_id === null)).map((x) => x.teacher_id))];
+export const teachersFor = (c: Awaited<ReturnType<typeof candidates>>, subject: string, section: string) => [...new Set(c.filter((x) => x.subject_id === subject && (x.section_id === section || x.section_id === null)).map((x) => x.teacher_id))];
 
 // ═════════════ class grid ═════════════
 export async function grid(inst: string, sectionId: string) {
@@ -127,7 +127,7 @@ export async function saveGrid(inst: string, sectionId: string, input: unknown) 
 }
 
 // ═════════════ publish ═════════════
-function clashSet(slots: Slot[]) {
+export function clashSet(slots: Slot[]) {
   const by = new Map<string, Slot[]>();
   for (const s of slots) if (s.teacher_id) { const k = `${s.teacher_id}|${s.day}|${s.period_id}`; by.set(k, [...(by.get(k) ?? []), s]); }
   return [...by.values()].filter((v) => new Set(v.map((x) => x.section_id)).size > 1);
