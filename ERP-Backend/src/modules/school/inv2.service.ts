@@ -31,7 +31,7 @@ export async function saveVendor(inst: string, id: string, input: unknown) {
 export async function vendorAction(inst: string, id: string, input: unknown) {
   const { action } = z.object({ action: z.enum(["bank_check", "verify", "reject", "blacklist", "reinstate"]) }).strict().parse(input);
   const v = (await vendors(inst)).items.find((x) => x.id === id); if (!v) throw new HttpError(404, "Not found.");
-  const upd = async (row: object) => { check(await supabaseAdmin.from("inv_suppliers").update(row).eq("id", id).select("id")); return { ok: true }; };
+  const upd = async (row: object) => { check(await supabaseAdmin.from("inv_suppliers").update(row).eq("id", id).eq("institution_id", inst).select("id")); return { ok: true }; };
   if (action === "bank_check") { if (!v.bank_details) throw new HttpError(409, "Add a valid account number and IFSC first."); return upd({ bank_status: "Verified" }); }
   if (action === "verify") { if (!v.gst_ok || !v.pan_ok || v.bank_status !== "Verified") throw new HttpError(409, "GSTIN, PAN and the bank account must all be valid first."); return upd({ vendor_status: "Verified" }); }
   if (action === "reject") return upd({ vendor_status: "Rejected" });
@@ -76,7 +76,7 @@ export async function award(inst: string, rfqId: string, input: unknown) {
   if (!q.l1 && !i.reason) throw new HttpError(400, "Awarding to a vendor other than the lowest price needs a reason.");
   const po = check(await supabaseAdmin.from("inv_pos").insert({ institution_id: inst, supplier_id: q.supplier_id, delivery_by: new Date(Date.now() + q.delivery_days * 86400000).toISOString().slice(0, 10) }).select("id, code").single()) as { id: string; code: string };
   check(await supabaseAdmin.from("inv_po_lines").insert({ po_id: po.id, item_id: r.item_id, qty: r.qty, price: q.unit_price }).select("po_id"));
-  check(await supabaseAdmin.from("inv_rfqs").update({ status: "Awarded", award_reason: i.reason ?? null, po_id: po.id }).eq("id", rfqId).select("id")); return { po: po.code };
+  check(await supabaseAdmin.from("inv_rfqs").update({ status: "Awarded", award_reason: i.reason ?? null, po_id: po.id }).eq("id", rfqId).eq("institution_id", inst).select("id")); return { po: po.code };
 }
 
 // ═════════════ three-way match ═════════════
@@ -101,7 +101,7 @@ export async function decideBill(inst: string, id: string, input: unknown) {
   const { action } = z.object({ action: z.enum(["send", "hold", "pay_received"]) }).strict().parse(input);
   const b = (await bills(inst)).items.find((x) => x.id === id); if (!b) throw new HttpError(404, "Not found."); if (b.decision !== "Open" && b.decision !== "Held") throw new HttpError(409, "Already decided.");
   if (action === "send" && b.result !== "Matched") throw new HttpError(409, "Only matched bills go for payment.");
-  check(await supabaseAdmin.from("inv_bills").update(action === "hold" ? { decision: "Held" } : { decision: "Sent for payment", pay_amount: action === "pay_received" ? b.received : b.billed }).eq("id", id).select("id")); return { ok: true };
+  check(await supabaseAdmin.from("inv_bills").update(action === "hold" ? { decision: "Held" } : { decision: "Sent for payment", pay_amount: action === "pay_received" ? b.received : b.billed }).eq("id", id).eq("institution_id", inst).select("id")); return { ok: true };
 }
 
 // ═════════════ school store ═════════════
@@ -123,7 +123,7 @@ export async function addStoreBill(inst: string, input: unknown) {
   const amount = i.lines.reduce((n, l) => n + l.qty * it.get(l.item_id)!.unit_price, 0);
   const b = check(await supabaseAdmin.from("store_bills").insert({ institution_id: inst, student_id: i.student_id ?? null, amount, paid_by: i.paid_by, sold_at: i.sold_at, sold_on: today() }).select("id, code").single()) as { id: string; code: string };
   check(await supabaseAdmin.from("store_bill_lines").insert(i.lines.map((l) => ({ bill_id: b.id, item_id: l.item_id, qty: l.qty, price: it.get(l.item_id)!.unit_price }))).select("bill_id"));
-  for (const l of i.lines) check(await supabaseAdmin.from("inv_items").update({ in_stock: it.get(l.item_id)!.in_stock - l.qty }).eq("id", l.item_id).select("id"));
+  for (const l of i.lines) check(await supabaseAdmin.from("inv_items").update({ in_stock: it.get(l.item_id)!.in_stock - l.qty }).eq("id", l.item_id).eq("institution_id", inst).select("id"));
   return { code: b.code, amount };
 }
 void one;

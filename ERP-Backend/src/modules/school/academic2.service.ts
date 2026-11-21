@@ -60,7 +60,7 @@ export async function updateClass(inst: string, id: string, input: unknown) {
   if (!g) throw new HttpError(404, "Class not found.");
   const dup = check(await supabaseAdmin.from("grades").select("id").eq("institution_id", inst).ilike("name", i.name).neq("id", id)) as unknown[];
   if (dup.length) throw new HttpError(409, "A class with that name already exists.");
-  check(await supabaseAdmin.from("grades").update({ name: i.name, stage: i.stage, campus_id: i.campus_id ?? null, is_active: i.status === "Active" }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("grades").update({ name: i.name, stage: i.stage, campus_id: i.campus_id ?? null, is_active: i.status === "Active" }).eq("id", id).eq("institution_id", inst).select("id"));
   const y = await currentYear(inst);
   if (y && i.sections !== undefined) {
     const have = (check(await supabaseAdmin.from("sections").select("name").eq("institution_id", inst).eq("grade_id", id).eq("academic_year_id", y.id)) as { name: string }[]).length;
@@ -109,7 +109,7 @@ export async function updateSectionRow(inst: string, id: string, input: unknown)
   if (i.class_teacher_id !== undefined) { if (i.class_teacher_id) await teacherOk(inst, i.class_teacher_id); patch.class_teacher_id = i.class_teacher_id; }
   if (i.room !== undefined) patch.room = blank(i.room);
   if (i.status) patch.is_active = i.status === "Active";
-  check(await supabaseAdmin.from("sections").update(patch).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("sections").update(patch).eq("id", id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }
 
@@ -289,6 +289,6 @@ export async function getCalendarSettings(inst: string) {
 export async function saveCalendarSettings(inst: string, input: unknown) {
   const i = z.object({ school_week: z.enum(["Monday – Saturday", "Monday – Friday"]), saturday_hours: z.enum(["Full day", "Half day (till 12:30)", "Off"]), show_holidays_in_app: z.boolean(), working_days: z.number().int().min(1).max(366).nullable().optional() }).strict().parse(input);
   check(await supabaseAdmin.from("calendar_settings").upsert({ institution_id: inst, school_week: i.school_week, saturday_hours: i.saturday_hours, show_holidays_in_app: i.show_holidays_in_app }, { onConflict: "institution_id" }).select("institution_id"));
-  if (i.working_days !== undefined) { const y = await currentYear(inst); if (y) check(await supabaseAdmin.from("academic_years").update({ working_days: i.working_days }).eq("id", y.id).select("id")); }
+  if (i.working_days !== undefined) { const y = await currentYear(inst); if (y) check(await supabaseAdmin.from("academic_years").update({ working_days: i.working_days }).eq("id", y.id).eq("institution_id", inst).select("id")); }
   return getCalendarSettings(inst);
 }

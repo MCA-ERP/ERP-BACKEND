@@ -82,7 +82,7 @@ async function makeEmployee(inst: string, i: z.infer<typeof empInput>, actorRole
   const [first, ...rest] = i.name.split(/\s+/); const role = i.role ?? roleFor(i.staff_type, i.designation ?? "");
   const password = generatePassword();
   const u = (await createUser({ email: i.email, password, first_name: first, last_name: rest.join(" ") || "-", phone: i.mobile, role, institution_id: inst, must_change_password: true }, actorRole)) as unknown as { id: string };
-  check(await supabaseAdmin.from("user_profiles").update({ designation: i.designation || null }).eq("id", u.id).select("id"));
+  check(await supabaseAdmin.from("user_profiles").update({ designation: i.designation || null }).eq("id", u.id).eq("institution_id", inst).select("id"));
   const row = { profile_id: u.id, institution_id: inst, department: i.department ?? "", staff_type: i.staff_type, mobile: i.mobile || null, joined_on: i.joined_on ?? today(), gender: i.gender ?? null, date_of_birth: i.date_of_birth ?? null, monthly_salary: i.monthly_salary ?? null, qualification: i.qualification || null, pan: i.pan || null, ...(i.emp_code ? { emp_code: i.emp_code } : {}) };
   check(await supabaseAdmin.from("hr_staff").insert(row).select("profile_id"));
   const code = (check(await supabaseAdmin.from("hr_staff").select("emp_code").eq("profile_id", u.id).single()) as { emp_code: string }).emp_code;
@@ -205,14 +205,14 @@ export async function moveCandidate(inst: string, id: string, input: unknown) {
   const next = { shortlist: "Shortlisted", reject: "Rejected", hold: "On hold", select: "Selected", reopen: "New" }[action];
   if (action === "shortlist" && c.stage !== "New" && c.stage !== "On hold") throw new HttpError(409, "Only a new or held application can be shortlisted.");
   if (action === "select" && !["Shortlisted", "Interviewed", "Interview scheduled"].includes(c.stage)) throw new HttpError(409, "Shortlist or interview the candidate first.");
-  check(await supabaseAdmin.from("hr_candidates").update({ stage: next }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("hr_candidates").update({ stage: next }).eq("id", id).eq("institution_id", inst).select("id"));
   if (action === "select") check(await supabaseAdmin.from("hr_checks").upsert({ candidate_id: id, institution_id: inst }, { onConflict: "candidate_id", ignoreDuplicates: true }).select("candidate_id"));
   return { ok: true, stage: next };
 }
 export async function setDemo(inst: string, id: string, input: unknown) {
   const { score } = z.object({ score: z.number().min(0).max(10) }).strict().parse(input);
   await cand(inst, id);
-  check(await supabaseAdmin.from("hr_candidates").update({ demo_score: score }).eq("id", id).select("id")); return { ok: true };
+  check(await supabaseAdmin.from("hr_candidates").update({ demo_score: score }).eq("id", id).eq("institution_id", inst).select("id")); return { ok: true };
 }
 export async function interviews(inst: string) {
   const [r, c] = await Promise.all([supabaseAdmin.from("hr_interviews").select("id, candidate_id, panel, on_date, at_time, mode, status, score, cand:candidate_id(name, stage, op:opening_id(position))").eq("institution_id", inst).order("on_date", { ascending: false }).order("at_time", { ascending: false }).limit(2000), candidates(inst)]);
@@ -224,7 +224,7 @@ export async function scheduleInterview(inst: string, input: unknown) {
   const c = await cand(inst, i.candidate_id);
   if (["Rejected", "Offered", "Accepted"].includes(c.stage)) throw new HttpError(409, `That candidate is ${c.stage.toLowerCase()}.`);
   const r = check(await supabaseAdmin.from("hr_interviews").insert({ institution_id: inst, candidate_id: i.candidate_id, panel: i.panel ?? "", on_date: i.on_date, at_time: i.at_time, mode: i.mode }).select("id").single());
-  check(await supabaseAdmin.from("hr_candidates").update({ stage: "Interview scheduled" }).eq("id", i.candidate_id).select("id"));
+  check(await supabaseAdmin.from("hr_candidates").update({ stage: "Interview scheduled" }).eq("id", i.candidate_id).eq("institution_id", inst).select("id"));
   return r;
 }
 export async function finishInterview(inst: string, id: string, input: unknown) {
@@ -232,8 +232,8 @@ export async function finishInterview(inst: string, id: string, input: unknown) 
   const r = check(await supabaseAdmin.from("hr_interviews").select("id, candidate_id, status").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; candidate_id: string; status: string } | null;
   if (!r) throw new HttpError(404, "Not found."); if (r.status !== "Scheduled") throw new HttpError(409, "That interview is already closed.");
   if (i.status === "Completed" && i.score === undefined) throw new HttpError(400, "Enter the panel score.");
-  check(await supabaseAdmin.from("hr_interviews").update({ status: i.status, score: i.status === "Completed" ? i.score : null }).eq("id", id).select("id"));
-  check(await supabaseAdmin.from("hr_candidates").update({ stage: i.status === "Completed" ? "Interviewed" : "Shortlisted" }).eq("id", r.candidate_id).select("id"));
+  check(await supabaseAdmin.from("hr_interviews").update({ status: i.status, score: i.status === "Completed" ? i.score : null }).eq("id", id).eq("institution_id", inst).select("id"));
+  check(await supabaseAdmin.from("hr_candidates").update({ stage: i.status === "Completed" ? "Interviewed" : "Shortlisted" }).eq("id", r.candidate_id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }
 const CHECKS = ["employer", "refs", "police", "certificates", "id_address"] as const;
@@ -263,14 +263,14 @@ export async function createOffer(inst: string, input: unknown, role: string, ac
   const checks = check(await supabaseAdmin.from("hr_checks").select("police").eq("candidate_id", i.candidate_id).maybeSingle()) as { police: boolean } | null;
   void checks;
   const r = check(await supabaseAdmin.from("hr_offers").insert({ institution_id: inst, ...i, sent_on: today(), created_by: actor ?? null }).select("id, code").single());
-  check(await supabaseAdmin.from("hr_candidates").update({ stage: "Offered" }).eq("id", i.candidate_id).select("id"));
+  check(await supabaseAdmin.from("hr_candidates").update({ stage: "Offered" }).eq("id", i.candidate_id).eq("institution_id", inst).select("id"));
   return r;
 }
 export async function answerOffer(inst: string, id: string, input: unknown) {
   const { status } = z.object({ status: z.enum(["Accepted", "Declined"]) }).strict().parse(input);
   const o = check(await supabaseAdmin.from("hr_offers").select("id, status, candidate_id").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; status: string; candidate_id: string } | null;
   if (!o) throw new HttpError(404, "Not found."); if (o.status !== "Sent") throw new HttpError(409, "That offer already has an answer.");
-  check(await supabaseAdmin.from("hr_offers").update({ status }).eq("id", id).select("id"));
-  check(await supabaseAdmin.from("hr_candidates").update({ stage: status === "Accepted" ? "Accepted" : "On hold" }).eq("id", o.candidate_id).select("id"));
+  check(await supabaseAdmin.from("hr_offers").update({ status }).eq("id", id).eq("institution_id", inst).select("id"));
+  check(await supabaseAdmin.from("hr_candidates").update({ stage: status === "Accepted" ? "Accepted" : "On hold" }).eq("id", o.candidate_id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }

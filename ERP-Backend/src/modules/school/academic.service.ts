@@ -43,7 +43,7 @@ export async function updateYear(inst: string, id: string, input: unknown) {
   check2(i);
   const dup = check(await supabaseAdmin.from("academic_years").select("id").eq("institution_id", inst).eq("name", i.name).neq("id", id)) as unknown[];
   if (dup.length) throw new HttpError(409, "A year with that name already exists.");
-  check(await supabaseAdmin.from("academic_years").update({ name: i.name, start_date: i.start_date, end_date: i.end_date, working_days: i.working_days ?? null }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("academic_years").update({ name: i.name, start_date: i.start_date, end_date: i.end_date, working_days: i.working_days ?? null }).eq("id", id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }
 
@@ -52,14 +52,14 @@ export async function activateYear(inst: string, id: string) {
   if (y.is_current) return { ok: true };
   if (y.is_locked) throw new HttpError(409, "A closed year can't be activated again.");
   check(await supabaseAdmin.from("academic_years").update({ is_current: false }).eq("institution_id", inst).eq("is_current", true).select("id"));
-  check(await supabaseAdmin.from("academic_years").update({ is_current: true }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("academic_years").update({ is_current: true }).eq("id", id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }
 
 export async function closeYear(inst: string, id: string) {
   const y = await one(inst, id);
   if (!y.is_current) throw new HttpError(409, "Only the active year can be closed.");
-  check(await supabaseAdmin.from("academic_years").update({ is_current: false, is_locked: true }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("academic_years").update({ is_current: false, is_locked: true }).eq("id", id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }
 

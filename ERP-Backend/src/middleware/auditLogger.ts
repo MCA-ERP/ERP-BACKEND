@@ -19,14 +19,13 @@ export function redact(value: unknown): unknown {
 export async function auditLogger(req: Request, res: Response, next: NextFunction): Promise<void> {
   const mutatingMethods = ["POST", "PUT", "PATCH", "DELETE"];
   
-  if (!mutatingMethods.includes(req.method)) {
-    return next();
-  }
+  const mutating = mutatingMethods.includes(req.method);
 
   // Intercept completion of request
   res.on("finish", async () => {
     // Only log successful operations
-    if (res.statusCode >= 200 && res.statusCode < 300) {
+    const denied = res.statusCode === 401 || res.statusCode === 403;
+    if ((mutating && res.statusCode >= 200 && res.statusCode < 300) || denied) {
       try {
         const actorId = req.user?.profileId || null;
         const actorEmail = req.user?.email || "anonymous";
@@ -37,7 +36,7 @@ export async function auditLogger(req: Request, res: Response, next: NextFunctio
           actor_id: actorId,
           actor_email: actorEmail,
           institution_id: req.user?.institutionId || null,
-          action: `${req.method} ${req.baseUrl}${req.path}`,
+          action: `${denied ? `DENIED ${res.statusCode} ` : ""}${req.method} ${req.baseUrl}${req.path}`,
           entity_name: req.baseUrl.replace("/api/v1/", "") || "general",
           new_data: req.body && !Buffer.isBuffer(req.body) ? redact(req.body) : null, // never store uploaded audio
           ip_address: ipAddress,

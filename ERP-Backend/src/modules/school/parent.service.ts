@@ -158,7 +158,7 @@ export async function setMessageStatus(inst: string, id: string, body: unknown) 
   const m = check(await supabaseAdmin.from("parent_messages").select("id, kind").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; kind: string } | null;
   if (!m) throw new HttpError(404, "Not found.");
   if (!MK[m.kind].includes(status)) throw new HttpError(400, "That status is not available here.");
-  check(await supabaseAdmin.from("parent_messages").update({ status }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("parent_messages").update({ status }).eq("id", id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }
 

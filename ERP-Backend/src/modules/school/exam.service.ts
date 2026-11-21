@@ -61,7 +61,7 @@ export async function updateExam(inst: string, id: string, input: unknown) {
   await typeOk(inst, i.exam_type_id);
   const dup = check(await supabaseAdmin.from("exams").select("id").eq("institution_id", inst).ilike("name", i.name).neq("id", id)) as unknown[];
   if (dup.length) throw new HttpError(409, "An exam with that name exists.");
-  check(await supabaseAdmin.from("exams").update({ name: i.name, exam_type_id: i.exam_type_id ?? null, classes: i.classes ?? "", starts_on: i.starts_on, ends_on: i.ends_on, ...(i.status ? { status: i.status } : {}) }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("exams").update({ name: i.name, exam_type_id: i.exam_type_id ?? null, classes: i.classes ?? "", starts_on: i.starts_on, ends_on: i.ends_on, ...(i.status ? { status: i.status } : {}) }).eq("id", id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }
 
@@ -141,7 +141,7 @@ export async function publishSheet(inst: string, input: unknown) {
   for (const g of grades) for (const r of gen.items) if (links.some((l) => l.grade_id === g.id && l.subject_id === r.subject_id)) rows.push({ institution_id: inst, exam_id: i.exam_id, grade_id: g.id, subject_id: r.subject_id, paper_date: r.date, starts: gen.time.starts, ends: gen.time.ends, hall, invigilator_id: plan.invigilators(r.subject_id)[0]?.id ?? null });
   if (!rows.length) throw new HttpError(409, "Nothing to publish.");
   check(await supabaseAdmin.from("exam_papers").upsert(rows, { onConflict: "exam_id,grade_id,subject_id" }).select("id"));
-  check(await supabaseAdmin.from("exams").update({ classes: i.classes, starts_on: gen.from, ends_on: gen.to, status: ex.status === "Draft" ? "Scheduled" : ex.status }).eq("id", i.exam_id).select("id"));
+  check(await supabaseAdmin.from("exams").update({ classes: i.classes, starts_on: gen.from, ends_on: gen.to, status: ex.status === "Draft" ? "Scheduled" : ex.status }).eq("id", i.exam_id).eq("institution_id", inst).select("id"));
   return { papers: rows.length, from: gen.from, to: gen.to };
 }
 export async function dateSheet(inst: string, examId: string) {

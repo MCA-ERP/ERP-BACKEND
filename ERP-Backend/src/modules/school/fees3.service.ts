@@ -66,7 +66,7 @@ export async function decideExpense(inst: string, id: string, input: unknown, ro
   if (x.status !== "Pending") throw new HttpError(409, "That was already decided.");
   const need = one(x.cat)?.approver ?? "Accountant";
   if (!(APPROVER_ROLES[need] ?? BIG).includes(role)) throw new HttpError(403, `Only the ${need} can decide this expense.`);
-  check(await supabaseAdmin.from("fee_expenses").update({ status, decided_on: today() }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("fee_expenses").update({ status, decided_on: today() }).eq("id", id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }
 

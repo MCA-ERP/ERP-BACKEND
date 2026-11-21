@@ -63,7 +63,7 @@ export async function setRequestStatus(inst: string, id: string, body: unknown) 
     }
     void order;
   }
-  check(await supabaseAdmin.from("parent_requests").update({ status }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("parent_requests").update({ status }).eq("id", id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }
 
@@ -87,7 +87,7 @@ export async function setFeedbackStatus(inst: string, id: string, body: unknown)
   const r = check(await supabaseAdmin.from("parent_feedback").select("id, status").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; status: string } | null;
   if (!r) throw new HttpError(404, "Not found.");
   if (r.status === "Resolved") throw new HttpError(409, "This is already resolved.");
-  check(await supabaseAdmin.from("parent_feedback").update({ status: i.status, ...(i.resolution ? { resolution: i.resolution } : {}) }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("parent_feedback").update({ status: i.status, ...(i.resolution ? { resolution: i.resolution } : {}) }).eq("id", id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }
 

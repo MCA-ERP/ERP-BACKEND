@@ -81,7 +81,7 @@ export async function resolveGeo(inst: string, id: string, input: unknown) {
   if (!g) throw new HttpError(404, "Check-in not found.");
   if (g.resolution) throw new HttpError(409, "This check-in was already decided.");
   await markStaff(inst, g.staff_id, action === "accept" ? "P" : "A", action === "accept" ? hm(g.at) : null, g.method);
-  check(await supabaseAdmin.from("geo_checkins").update({ resolution: action === "accept" ? "Accepted" : "Absent" }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("geo_checkins").update({ resolution: action === "accept" ? "Accepted" : "Absent" }).eq("id", id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }
 
@@ -131,7 +131,7 @@ export async function logSync(inst: string, input: unknown) {
   const dev = check(await supabaseAdmin.from("bio_devices").select("id").eq("id", i.device_id).eq("institution_id", inst).maybeSingle());
   if (!dev) throw new HttpError(404, "Device not found.");
   check(await supabaseAdmin.from("bio_syncs").insert({ institution_id: inst, ...i }).select("id"));
-  check(await supabaseAdmin.from("bio_devices").update({ status: i.status === "Success" ? "Online" : "Offline", ...(i.status === "Success" ? { last_sync: new Date().toISOString() } : {}) }).eq("id", i.device_id).select("id"));
+  check(await supabaseAdmin.from("bio_devices").update({ status: i.status === "Success" ? "Online" : "Offline", ...(i.status === "Success" ? { last_sync: new Date().toISOString() } : {}) }).eq("id", i.device_id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }
 

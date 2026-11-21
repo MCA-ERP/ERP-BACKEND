@@ -1,0 +1,6 @@
+-- DPDP: consent register (append-only) and data requests.
+CREATE TABLE public.consent_records (id UUID PRIMARY KEY DEFAULT uuid_generate_v4(), institution_id UUID NOT NULL REFERENCES public.institutions(id) ON DELETE CASCADE, parent_name VARCHAR(100) NOT NULL, purpose VARCHAR(120) NOT NULL, choice VARCHAR(10) NOT NULL CHECK (choice IN ('Given', 'Withdrawn')), source VARCHAR(30) NOT NULL, recorded_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE TABLE public.data_requests (id UUID PRIMARY KEY DEFAULT uuid_generate_v4(), institution_id UUID NOT NULL REFERENCES public.institutions(id) ON DELETE CASCADE, parent_name VARCHAR(100) NOT NULL, kind VARCHAR(20) NOT NULL CHECK (kind IN ('Access copy', 'Correction', 'Erasure')), details VARCHAR(300) NOT NULL DEFAULT '', requested_on DATE NOT NULL DEFAULT CURRENT_DATE, status VARCHAR(10) NOT NULL DEFAULT 'Open' CHECK (status IN ('Open', 'Done', 'Declined')));
+ALTER TABLE public.consent_records ENABLE ROW LEVEL SECURITY; ALTER TABLE public.data_requests ENABLE ROW LEVEL SECURITY;
+CREATE RULE consent_no_update AS ON UPDATE TO public.consent_records DO INSTEAD NOTHING;
+CREATE RULE consent_no_delete AS ON DELETE TO public.consent_records DO INSTEAD NOTHING;

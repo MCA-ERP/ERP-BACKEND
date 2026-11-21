@@ -95,7 +95,7 @@ export async function setSessionStatus(inst: string, id: string, input: unknown)
   const cur = check(await supabaseAdmin.from("online_classes").select("status").eq("id", id).eq("institution_id", inst).maybeSingle()) as { status: string } | null;
   if (!cur) throw new HttpError(404, "Session not found.");
   if (cur.status !== "Scheduled") throw new HttpError(409, "That session is already closed.");
-  check(await supabaseAdmin.from("online_classes").update({ status: i.status, ...(i.status === "Completed" && i.attended !== undefined ? { attended_pct: i.attended } : {}) }).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("online_classes").update({ status: i.status, ...(i.status === "Completed" && i.attended !== undefined ? { attended_pct: i.attended } : {}) }).eq("id", id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }
 

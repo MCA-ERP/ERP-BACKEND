@@ -65,8 +65,8 @@ export async function answerUnanswered(inst: string, id: string, input: unknown)
   const { answer, topic } = z.object({ answer: z.string().trim().min(2, "Write the answer.").max(1000), topic: z.string().trim().max(40).optional() }).strict().parse(input);
   const q = check(await supabaseAdmin.from("chatbot_unanswered").select("id, question").eq("id", id).eq("institution_id", inst).eq("answered", false).maybeSingle()) as { id: string; question: string } | null; if (!q) throw new HttpError(404, "Not found.");
   const ex = check(await supabaseAdmin.from("chatbot_faqs").select("id").eq("institution_id", inst).eq("question", q.question).maybeSingle()) as { id: string } | null;
-  if (ex) check(await supabaseAdmin.from("chatbot_faqs").update({ answer, enabled: true }).eq("id", ex.id).select("id")); else check(await supabaseAdmin.from("chatbot_faqs").insert({ institution_id: inst, topic: topic || "General", question: q.question, answer, enabled: true }).select("id"));
-  check(await supabaseAdmin.from("chatbot_unanswered").update({ answered: true }).eq("id", id).select("id")); return { ok: true };
+  if (ex) check(await supabaseAdmin.from("chatbot_faqs").update({ answer, enabled: true }).eq("id", ex.id).eq("institution_id", inst).select("id")); else check(await supabaseAdmin.from("chatbot_faqs").insert({ institution_id: inst, topic: topic || "General", question: q.question, answer, enabled: true }).select("id"));
+  check(await supabaseAdmin.from("chatbot_unanswered").update({ answered: true }).eq("id", id).eq("institution_id", inst).select("id")); return { ok: true };
 }
 export async function editFaq(inst: string, id: string, input: unknown) {
   const i = z.object({ answer: z.string().trim().max(1000).optional(), enabled: z.boolean().optional() }).strict().parse(input);

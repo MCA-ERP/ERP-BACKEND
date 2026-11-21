@@ -70,7 +70,7 @@ export async function setCurrentYear(institutionId: string, yearId: string) {
 
   check(await supabaseAdmin.from("academic_years").update({ is_current: false }).eq("institution_id", institutionId).eq("is_current", true));
   return check(
-    await supabaseAdmin.from("academic_years").update({ is_current: true }).eq("id", yearId).select().single()
+    await supabaseAdmin.from("academic_years").update({ is_current: true }).eq("id", yearId).eq("institution_id", institutionId).select().single()
   );
 }
 

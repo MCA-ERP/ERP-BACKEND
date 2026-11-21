@@ -187,6 +187,7 @@ export async function createSchool(input: SchoolInput, actorProfileId?: string) 
   const inst = check(
     await supabaseAdmin.from("institutions").insert({ ...fields, code, status }).select("id").single()
   ) as { id: string };
+  try { const { seedSchoolDefaults } = await import("../school/defaults.service"); await seedSchoolDefaults(inst.id); } catch (e) { console.error("Default school data not added:", e); }
 
   const sub = await supabaseAdmin.from("subscriptions").insert({
     institution_id: inst.id,

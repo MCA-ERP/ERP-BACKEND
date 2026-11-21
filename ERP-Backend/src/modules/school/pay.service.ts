@@ -125,7 +125,7 @@ export async function decideProbation(inst: string, id: string, input: unknown) 
   const p = check(await supabaseAdmin.from("hr_probation").select("id, ends_on, status").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; ends_on: string; status: string } | null;
   if (!p) throw new HttpError(404, "Not found."); if (!["On probation", "Extended"].includes(p.status)) throw new HttpError(409, "That was already decided.");
   const row = action === "extend" ? { status: "Extended", ends_on: addMonths(p.ends_on, 3) } : { status: action === "confirm" ? "Confirmed" : "Ended", decided_on: today() };
-  check(await supabaseAdmin.from("hr_probation").update(row).eq("id", id).select("id"));
+  check(await supabaseAdmin.from("hr_probation").update(row).eq("id", id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }
 

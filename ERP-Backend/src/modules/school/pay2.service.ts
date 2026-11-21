@@ -25,9 +25,9 @@ export async function approval(inst: string) {
 export async function decideRun(inst: string, input: unknown, role: string, who: string) {
   const i = z.object({ month: monthRe, action: z.enum(["verify", "send_back", "approve"]), note: z.string().trim().max(200).optional() }).strict().parse(input);
   const r = await run(inst, i.month); if (!r) throw new HttpError(404, "Calculate the payroll first.");
-  if (i.action === "verify") { if (r.status !== "Calculated") throw new HttpError(409, "Only a calculated payroll can be verified."); if (!["HR", "Principal", "VicePrincipal", "InstitutionAdmin"].includes(role)) throw new HttpError(403, "Only HR or the principal can verify payroll."); check(await supabaseAdmin.from("pay_runs").update({ status: "Verified" }).eq("id", r.id).select("id")); await log(inst, i.month, "HR verified", who, i.note); }
-  else if (i.action === "approve") { if (r.status !== "Verified") throw new HttpError(409, "HR must verify the payroll first."); if (!["Accountant", "Finance", "Principal", "InstitutionAdmin"].includes(role)) throw new HttpError(403, "Only a finance officer or the principal can approve payroll."); check(await supabaseAdmin.from("pay_runs").update({ status: "Approved" }).eq("id", r.id).select("id")); await log(inst, i.month, "Finance approved", who, i.note); }
-  else { if (!["Verified", "Calculated"].includes(r.status)) throw new HttpError(409, "It is too late to send this back."); check(await supabaseAdmin.from("pay_runs").update({ status: "Calculated" }).eq("id", r.id).select("id")); await log(inst, i.month, "Returned", who, i.note); }
+  if (i.action === "verify") { if (r.status !== "Calculated") throw new HttpError(409, "Only a calculated payroll can be verified."); if (!["HR", "Principal", "VicePrincipal", "InstitutionAdmin"].includes(role)) throw new HttpError(403, "Only HR or the principal can verify payroll."); check(await supabaseAdmin.from("pay_runs").update({ status: "Verified" }).eq("id", r.id).eq("institution_id", inst).select("id")); await log(inst, i.month, "HR verified", who, i.note); }
+  else if (i.action === "approve") { if (r.status !== "Verified") throw new HttpError(409, "HR must verify the payroll first."); if (!["Accountant", "Finance", "Principal", "InstitutionAdmin"].includes(role)) throw new HttpError(403, "Only a finance officer or the principal can approve payroll."); check(await supabaseAdmin.from("pay_runs").update({ status: "Approved" }).eq("id", r.id).eq("institution_id", inst).select("id")); await log(inst, i.month, "Finance approved", who, i.note); }
+  else { if (!["Verified", "Calculated"].includes(r.status)) throw new HttpError(409, "It is too late to send this back."); check(await supabaseAdmin.from("pay_runs").update({ status: "Calculated" }).eq("id", r.id).eq("institution_id", inst).select("id")); await log(inst, i.month, "Returned", who, i.note); }
   return { ok: true };
 }
 export async function history(inst: string) {
@@ -60,7 +60,7 @@ export async function payslips(inst: string, month: string) {
 export async function sharePayslips(inst: string, input: unknown) {
   const { month } = z.object({ month: monthRe }).strict().parse(input);
   const r = await run(inst, month); if (!r || !["Approved", "Paid"].includes(r.status)) throw new HttpError(409, "Payslips can be generated once finance approves.");
-  check(await supabaseAdmin.from("pay_runs").update({ payslips_on: today() }).eq("id", r.id).select("id")); return { ok: true };
+  check(await supabaseAdmin.from("pay_runs").update({ payslips_on: today() }).eq("id", r.id).eq("institution_id", inst).select("id")); return { ok: true };
 }
 
 // ═════════════ salary payments ═════════════
@@ -76,7 +76,7 @@ export async function recordPayments(inst: string, input: unknown, role: string,
   const r = await run(inst, month); if (!r || r.status !== "Approved") throw new HttpError(409, "Finance must approve the payroll first.");
   const s = await slips(inst, month); const d = today();
   check(await supabaseAdmin.from("pay_payments").upsert(s.items.map((x) => ({ institution_id: inst, month, staff_id: x.staff_id, net: x.net, bank: x.bank, utr: "", paid_on: d, status: x.bank ? "Paid" : "Failed" })), { onConflict: "institution_id,month,staff_id" }).select("id"));
-  check(await supabaseAdmin.from("pay_runs").update({ status: "Paid", paid_on: d }).eq("id", r.id).select("id"));
+  check(await supabaseAdmin.from("pay_runs").update({ status: "Paid", paid_on: d }).eq("id", r.id).eq("institution_id", inst).select("id"));
   await log(inst, month, "Paid", who); return { paid: s.items.filter((x) => x.bank).length, failed: s.items.filter((x) => !x.bank).length };
 }
 export async function updatePayment(inst: string, id: string, input: unknown) {

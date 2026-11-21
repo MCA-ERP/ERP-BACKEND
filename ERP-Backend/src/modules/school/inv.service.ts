@@ -16,7 +16,7 @@ async function staff(inst: string) { return (await directory(inst)).items.map((s
 async function stock(inst: string, itemId: string, delta: number) {
   const i = check(await supabaseAdmin.from("inv_items").select("in_stock").eq("id", itemId).eq("institution_id", inst).maybeSingle()) as { in_stock: number } | null; if (!i) throw new HttpError(404, "Item not found.");
   if (i.in_stock + delta < 0) throw new HttpError(409, `Only ${i.in_stock} in stock.`);
-  check(await supabaseAdmin.from("inv_items").update({ in_stock: i.in_stock + delta }).eq("id", itemId).select("id"));
+  check(await supabaseAdmin.from("inv_items").update({ in_stock: i.in_stock + delta }).eq("id", itemId).eq("institution_id", inst).select("id"));
 }
 
 // ═════════════ suppliers ═════════════
@@ -82,7 +82,7 @@ export async function receive(inst: string, input: unknown) {
   const g = check(await supabaseAdmin.from("inv_grns").insert({ institution_id: inst, po_id: i.po_id, supplier_id: po.supplier_id, received_on: today() }).select("id, code").single()) as { id: string; code: string };
   check(await supabaseAdmin.from("inv_grn_lines").insert(i.lines.map((l) => ({ grn_id: g.id, item_id: l.item_id, qty: l.qty, price: pl.find((x) => x.item_id === l.item_id)!.price }))).select("grn_id"));
   for (const l of i.lines) { const p = pl.find((x) => x.item_id === l.item_id)!; check(await supabaseAdmin.from("inv_po_lines").update({ received: p.received + l.qty }).eq("po_id", i.po_id).eq("item_id", l.item_id).select("po_id")); await stock(inst, l.item_id, l.qty); p.received += l.qty; }
-  const full = pl.every((p) => p.received >= p.qty); check(await supabaseAdmin.from("inv_pos").update({ status: full ? "Received" : "Partly received" }).eq("id", i.po_id).select("id"));
+  const full = pl.every((p) => p.received >= p.qty); check(await supabaseAdmin.from("inv_pos").update({ status: full ? "Received" : "Partly received" }).eq("id", i.po_id).eq("institution_id", inst).select("id"));
   return { code: g.code, complete: full };
 }
 
@@ -100,7 +100,7 @@ export async function decideAdjustment(inst: string, id: string, input: unknown)
   const { status } = z.object({ status: z.enum(["Approved", "Rejected"]) }).strict().parse(input);
   const a = check(await supabaseAdmin.from("inv_adjustments").select("id, item_id, change, status").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; item_id: string; change: number; status: string } | null; if (!a) throw new HttpError(404, "Not found."); if (a.status !== "Pending") throw new HttpError(409, "That was already decided.");
   if (status === "Approved") await stock(inst, a.item_id, a.change);
-  check(await supabaseAdmin.from("inv_adjustments").update({ status }).eq("id", id).select("id")); return { ok: true };
+  check(await supabaseAdmin.from("inv_adjustments").update({ status }).eq("id", id).eq("institution_id", inst).select("id")); return { ok: true };
 }
 export async function stockIssues(inst: string, kind: string) {
   const k = z.enum(["Department", "Staff"]).parse(kind);
@@ -138,8 +138,8 @@ export async function addUpkeep(inst: string, input: unknown) {
 export async function finishUpkeep(inst: string, id: string) {
   const m = check(await supabaseAdmin.from("inv_maintenance").select("id, kind, every, next_due").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; kind: string; every: string; next_due: string } | null; if (!m) throw new HttpError(404, "Not found.");
   const n = /year/i.test(m.every) ? 365 : /6 months/i.test(m.every) ? 182 : /3 months/i.test(m.every) ? 91 : /month/i.test(m.every) ? 30 : 0;
-  if (n && m.kind === "Service schedule") check(await supabaseAdmin.from("inv_maintenance").update({ next_due: addDays(m.next_due > today() ? m.next_due : today(), n) }).eq("id", id).select("id"));
-  else check(await supabaseAdmin.from("inv_maintenance").update({ status: "Done" }).eq("id", id).select("id"));
+  if (n && m.kind === "Service schedule") check(await supabaseAdmin.from("inv_maintenance").update({ next_due: addDays(m.next_due > today() ? m.next_due : today(), n) }).eq("id", id).eq("institution_id", inst).select("id"));
+  else check(await supabaseAdmin.from("inv_maintenance").update({ status: "Done" }).eq("id", id).eq("institution_id", inst).select("id"));
   return { ok: true, repeats: !!n && m.kind === "Service schedule" };
 }
 void one;
