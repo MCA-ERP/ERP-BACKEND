@@ -16,7 +16,7 @@ export const GROUPS = {
   support_staff: { label: "Support staff", roles: ["PlatformManager", "Finance", "SupportAgent", "ContentEditor"], platform: true },
   school_admin: { label: "School admins", roles: ["InstitutionAdmin"], platform: false },
   principal: { label: "Principals", roles: ["Principal"], platform: false },
-  teachers: { label: "Teachers", roles: ["Faculty"], platform: false },
+  teachers: { label: "Teachers", roles: ["Faculty", "ClassTeacher", "HOD"], platform: false },
   accountants: { label: "Accountants", roles: ["Accountant"], platform: false },
   other_staff: { label: "Other staff", roles: ["Registrar", "HR", "Librarian"], platform: false },
   students: { label: "Students", roles: ["Student"], platform: false },

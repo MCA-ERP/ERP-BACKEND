@@ -86,7 +86,7 @@ async function activeYesterday(now = Date.now()) {
     const rows = check(await supabaseAdmin.from("user_profiles").select("id, institution_id, roles:role_id(name)").in("id", ids.slice(i, i + 500))) as unknown as { roles: { name: string } | null }[];
     for (const r of rows) {
       const n = r.roles?.name ?? "";
-      if (n === "Faculty") out.Teachers++;
+      if (["Faculty", "ClassTeacher", "HOD"].includes(n)) out.Teachers++;
       else if (n === "Parent") out.Parents++;
       else if (n === "Student") out.Students++;
       else out.Admins++;

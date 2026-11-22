@@ -88,5 +88,6 @@ export async function confirmVolunteer(inst: string, id: string) {
 }
 export async function addDuty(inst: string, input: unknown) {
   const i = z.object({ event_id: uid, staff_name: z.string().trim().min(2).max(80), duty: z.string().trim().min(2).max(80), time_label: z.string().trim().max(40).optional() }).strict().parse(input);
-  if (!check(await supabaseAdmin.from("event_mgmt").select("id").eq("id", i.event_id).eq("institution_id", inst).maybeSingle())) throw new HttpError(404, "Event not found."); return check(await supabaseAdmin.from("event_duties").insert({ institution_id: inst, ...i }).select("id").single());
+  if (!check(await supabaseAdmin.from("event_mgmt").select("id").eq("id", i.event_id).eq("institution_id", inst).maybeSingle())) throw new HttpError(404, "Event not found."); const [fn, ...rest] = i.staff_name.split(/s+/); const who = check(await supabaseAdmin.from("user_profiles").select("id").eq("institution_id", inst).ilike("first_name", fn).ilike("last_name", rest.join(" ") || "%").limit(2)) as { id: string }[]; // the duty belongs to the teacher when the name is unambiguous
+  return check(await supabaseAdmin.from("event_duties").insert({ institution_id: inst, ...i, staff_id: who.length === 1 ? who[0].id : null }).select("id").single());
 }

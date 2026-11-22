@@ -9,7 +9,7 @@ import { getRules } from "./timetable.service";
 /** Teacher views, rooms, allocations, substitutions and timetable reports. */
 const uid = z.string().uuid();
 const iso = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Choose a date.");
-const LIMIT = 40;
+export const LIMIT = 40;
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const istDate = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 const dayOf = (date: string) => { const d = new Date(date + "T00:00:00Z").getUTCDay(); return d === 0 ? 0 : d; };

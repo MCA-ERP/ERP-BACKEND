@@ -118,7 +118,7 @@ export async function verifyDocument(inst: string, id: string) {
 }
 
 // ═════════════ staff performance ═════════════
-async function cycleName(inst: string) { const y = Number(Date.parse((await yearStart(inst)) + "T00:00:00Z") ? (await yearStart(inst)).slice(0, 4) : new Date().getFullYear()); return `${y}-${String(y + 1).slice(2)}`; }
+export async function cycleName(inst: string) { const y = Number(Date.parse((await yearStart(inst)) + "T00:00:00Z") ? (await yearStart(inst)).slice(0, 4) : new Date().getFullYear()); return `${y}-${String(y + 1).slice(2)}`; }
 export async function appraisals(inst: string, kind: string) {
   const k = z.enum(["Appraisals", "Reviews", "Ratings"]).parse(kind);
   const [r, st] = await Promise.all([supabaseAdmin.from("hr_appraisals").select("id, staff_id, kind, reviewer, period, rating, remarks, status").eq("institution_id", inst).eq("kind", k).order("period", { ascending: false }).limit(2000), staffMap(inst)]);

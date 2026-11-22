@@ -214,7 +214,7 @@ export async function getCampus(id: string) {
   const [students, users, teachers] = await Promise.all([
     supabaseAdmin.from("students").select("*", { count: "exact", head: true }).eq("campus_id", id).eq("status", "Enrolled").is("deleted_at", null),
     supabaseAdmin.from("user_profiles").select("*", { count: "exact", head: true }).eq("campus_id", id).eq("status", "active"),
-    supabaseAdmin.from("user_profiles").select("id, roles:role_id!inner(name)", { count: "exact", head: true }).eq("campus_id", id).eq("status", "active").eq("roles.name", "Faculty"),
+    supabaseAdmin.from("user_profiles").select("id, roles:role_id!inner(name)", { count: "exact", head: true }).eq("campus_id", id).eq("status", "active").in("roles.name", ["Faculty", "ClassTeacher", "HOD"]),
   ]);
   return { campus, counts: { students: students.count ?? 0, users: users.count ?? 0, teachers: teachers.count ?? 0 } };
 }
