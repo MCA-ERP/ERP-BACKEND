@@ -6,6 +6,19 @@ import type { ChatMessage } from "../admin/assist.service";
 import { MODEL, NOT_SET, limit, provider, tidy } from "../admin/assist.service";
 import * as dash from "./dashboard.service";
 import { SCHOOL_MENU } from "./school-portal-map";
+import { MENU_MODULES } from "../../lib/portal-modules";
+
+const LABEL_KEY: Record<string, string> = { "Front Office": "front-office", "Admission Management": "admission", "Student Management": "students", "Parent Management": "parents", "Academic Management": "academics", "Attendance Management": "attendance", "Timetable Management": "timetable", "Examination Management": "examinations", "Homework & LMS": "lms", "Fee & Finance Management": "fees", "HR & Staff Management": "hr", "Payroll Management": "payroll", "Transport Management": "transport", "Library Management": "library", "Inventory Management": "inventory", Communication: "communication", "Hostel Management": "hostel", "Visitor Management": "visitors", "Health & Student Welfare": "health", "Certificates & Documents": "certificates", "Activities & Events": "activities" };
+/** null means "everything" (Super Admin). Otherwise only the modules the school's current plan includes. */
+export const allowed = (modules: string[] | null, key: string) => modules === null || !MENU_MODULES[key] || MENU_MODULES[key].some((m) => modules.includes(m));
+/** The portal guide with every page of a module the school does not have removed, so the assistant cannot point to it. */
+export function menuFor(modules: string[] | null): string {
+  if (modules === null) return SCHOOL_MENU;
+  const out: string[] = []; let keep = true;
+  for (const line of SCHOOL_MENU.split("\n")) { if (!line.startsWith(" ")) { const key = LABEL_KEY[line.trim()]; keep = !key || allowed(modules, key); } if (keep) out.push(line); }
+  return out.join("\n");
+}
+const TOOL_NEEDS: Record<string, string> = { students: "students", staff: "hr", classes_and_subjects: "academics" };
 
 /**
  * The assistant inside the School Admin portal. Every tool reads only the signed-in school's own records (the school id
@@ -30,8 +43,9 @@ function exportOf(label: string, name: string, head: string[], rows: (string | n
   return { kind: "export", label: label.slice(0, 60), name, head, rows, auto: true };
 }
 
-async function runTool(inst: string, name: string, input: Record<string, unknown>, actions: AssistAction[]): Promise<string> {
+async function runTool(inst: string, name: string, input: Record<string, unknown>, actions: AssistAction[], modules: string[] | null): Promise<string> {
   try {
+    if (TOOL_NEEDS[name] && !allowed(modules, TOOL_NEEDS[name])) return "This school's plan does not include that module, so there is nothing to look up. Tell the person it is not part of their plan and suggest asking the administrator about upgrading.";
     const str = (k: string) => (typeof input[k] === "string" ? (input[k] as string) : undefined);
     const wantsFile = input.export === true;
     if (name === "school_overview") {
@@ -71,10 +85,10 @@ async function runTool(inst: string, name: string, input: Record<string, unknown
       const r = await dash.recentActivity(inst, { tab: str("tab") === "changes" ? "changes" : "all", search: str("search") });
       return trim(r.list.slice(0, 20).map((x) => ({ when: x.time, user: x.user, action: x.action, record: x.record })));
     }
-    if (name === "portal_guide") return SCHOOL_MENU;
+    if (name === "portal_guide") return menuFor(modules);
     if (name === "open_page_link") {
       const href = String(input.href ?? "");
-      const known = new Set([...SCHOOL_MENU.matchAll(/\((\/school[a-z0-9\-/]*)\)/gi)].map((m) => m[1]));
+      const known = new Set([...menuFor(modules).matchAll(/\((\/school[a-z0-9\-/]*)\)/gi)].map((m) => m[1]));
       if (!known.has(href.split("?")[0])) return "That address is not in the portal. Call portal_guide and use an address from it.";
       actions.push({ kind: "link", label: String(input.label ?? "Open page").slice(0, 60), href, go: input.go === true });
       return "Button added.";
@@ -85,7 +99,7 @@ async function runTool(inst: string, name: string, input: Record<string, unknown
   }
 }
 
-export async function schoolChat(messages: ChatMessage[], page: string | undefined, who: string, inst: string, roleLabel: string): Promise<{ reply: string; actions: AssistAction[] }> {
+export async function schoolChat(messages: ChatMessage[], page: string | undefined, who: string, inst: string, roleLabel: string, modules: string[] | null = null): Promise<{ reply: string; actions: AssistAction[] }> {
   if (!ID.test(inst)) throw new HttpError(400, "No school is selected.");
   const which = provider();
   if (!which) throw new HttpError(503, NOT_SET);
@@ -98,11 +112,12 @@ export async function schoolChat(messages: ChatMessage[], page: string | undefin
     "When the person asks for a list, file, Excel, PDF or CSV, call the tool with export=true. You cannot change anything: for actions, say which page to open and what to click.",
     "When someone tells you to open or go to a page (in English, Hindi or Telugu, typed or spoken), call portal_guide if you need the address, then open_page_link with go=true, and confirm in one short line. Do not say a page is open unless you called the tool. When someone asks how to open or find a page, answer in one line with the bold path (for example: Open **Dashboard → Student Statistics**.), call open_page_link once with go=false, and add nothing else.",
     "Answer directly and briefly in plain language. Write **bold** around page names and menu paths, joined with arrows. Use short lines or simple lists; never markdown tables, pipes or headings, and never write HTML. Reply in the language the person wrote or spoke in (English, Hindi or Telugu); keep page names in English. Never show ids or UUIDs. Dates like 12 Oct 2026. Call tools only through the tool-calling mechanism and never write a tool call into your answer.",
+    modules === null ? "" : `This school's plan currently includes only these parts of the portal: ${Object.keys(LABEL_KEY).filter((l) => allowed(modules, LABEL_KEY[l])).concat(["Dashboard", "My Profile", "My Work", "Reports & Analytics", "School Settings"]).join(", ")}. Anything else (for example ${Object.keys(LABEL_KEY).filter((l) => !allowed(modules, LABEL_KEY[l])).slice(0, 4).join(", ") || "nothing"}) is NOT available to this school: say it is not part of their plan, never describe it, open it or look it up.`,
     page ? `The person is currently on: ${page}` : "",
   ].filter(Boolean).join("\n\n");
 
   try {
-    const out = await runAgent({ provider: which, model: MODEL(), system, messages: messages.slice(-12), user: { permissions: [] }, tools: TOOLS as never, run: (n, i, a) => runTool(inst, n, i, a) });
+    const out = await runAgent({ provider: which, model: MODEL(), system, messages: messages.slice(-12), user: { permissions: [] }, tools: TOOLS as never, run: (n, i, a) => runTool(inst, n, i, a, modules) });
     return { reply: tidy(out.text) || "I could not come up with an answer. Try asking in another way.", actions: out.actions };
   } catch (err) {
     const status = (err as { status?: number }).status;
