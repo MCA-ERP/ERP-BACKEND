@@ -1,0 +1,4 @@
+-- A module for the AI assistant inside the School Admin portal, so a plan can switch it on or off.
+INSERT INTO public.modules (code, name, description, is_core, sort_order, category, build_status) VALUES ('school_assistant', 'AI Assistant (School Admin)', 'MCA Assist inside the School Admin portal', FALSE, 64, 'Advanced', 'live') ON CONFLICT (code) DO NOTHING;
+INSERT INTO public.plan_modules (plan_id, module_code) SELECT p.id, 'school_assistant' FROM public.plans p WHERE p.sort_order >= 2 AND p.sort_order < 90 ON CONFLICT DO NOTHING;
+INSERT INTO public.feature_flags (key, name, description, module_code, rollout_percent, enabled) VALUES ('mod_school_assistant', 'AI Assistant (School Admin)', 'Switch for the School Admin assistant', 'school_assistant', 100, TRUE) ON CONFLICT (key) DO NOTHING;

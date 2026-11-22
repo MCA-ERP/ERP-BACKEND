@@ -1,3 +1,4 @@
+import { moduleGate } from "../../lib/portal-modules";
 import express, { Router, Request, Response, NextFunction } from "express";
 import { z } from "zod";
 import { authGuard } from "../../middleware/authGuard";
@@ -65,11 +66,13 @@ import * as subsvc from "../admin/subscriptions.service";
 import * as modcfg from "../admin/module-config.service";
 import * as sm from "../admin/support-mgmt.service";
 import * as svc2 from "../admin/schools.service";
+import * as topbar from "./topbar.service";
 
 export const schoolRouter = Router();
 
 // Everything here is the school's own setup data; SuperAdmin must say which school via ?institution_id=
 schoolRouter.use(authGuard);
+schoolRouter.use(moduleGate);
 
 const manage = requirePermission("academics.setup.manage");
 const view = requirePermission("sis.student.view");
@@ -901,7 +904,7 @@ schoolRouter.post("/alumni/events", staffDesk, h(async (req, res, inst) => { res
 schoolRouter.post("/assist/chat", view, h(async (req, _res, inst) => {
   const { messages, page } = z.object({ messages: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().trim().min(1).max(4000) })).min(1).max(20), page: z.string().trim().max(200).optional() }).parse(req.body);
   if (messages[messages.length - 1].role !== "user") throw new HttpError(400, "Ask a question first.");
-  return schoolChat(messages, page, req.user?.profileId ?? "anonymous", inst, req.user?.roleDisplayName ?? "");
+  return schoolChat(messages, page, req.user?.profileId ?? "anonymous", inst, req.user?.roleDisplayName ?? "", req.user?.role === "SuperAdmin" ? null : (req.user?.modules ?? []));
 }));
 schoolRouter.post("/assist/transcribe", view, express.raw({ type: "audio/*", limit: "2mb" }), h(async (req, _res) => {
   const mime = String(req.headers["content-type"] ?? "audio/webm").split(";")[0];
@@ -984,6 +987,10 @@ schoolRouter.post("/subjects/defaults", manage, h((_req, _res, inst) => svc.addD
 schoolRouter.patch("/subjects/:id", manage, h(async (req, _res, inst) => ({
   subject: await svc.updateSubject(inst, uuid(req), z.object({ name: z.string().trim().min(1).max(150), is_active: z.boolean() }).partial().parse(req.body)),
 })));
+
+// the top bar: search box and bell
+schoolRouter.get("/topbar/search", h((req, _res, inst) => topbar.search(inst, req.query.q, ["InstitutionAdmin", "Principal", "VicePrincipal", "Teacher", "Accountant", "Receptionist"].includes(req.user?.role ?? "") || (req.user?.permissions ?? []).includes("sis.student.view"), ["InstitutionAdmin", "Principal", "VicePrincipal"].includes(req.user?.role ?? ""))));
+schoolRouter.get("/topbar/notifications", h((req, _res, inst) => topbar.notifications(inst, ["InstitutionAdmin", "Principal", "VicePrincipal"].includes(req.user?.role ?? ""))));
 
 // Announcements from the platform team (any signed-in school user)
 schoolRouter.get("/announcements", h((_req, _res, inst) => listSchoolAnnouncements(inst).then((announcements) => ({ announcements }))));
