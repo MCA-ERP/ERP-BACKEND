@@ -68,6 +68,8 @@ import * as sm from "../admin/support-mgmt.service";
 import * as svc2 from "../admin/schools.service";
 import * as topbar from "./topbar.service";
 
+import * as accFees from "../accounts/accounts-fees.service";
+
 export const schoolRouter = Router();
 
 // Everything here is the school's own setup data; SuperAdmin must say which school via ?institution_id=
@@ -446,6 +448,7 @@ schoolRouter.post(fee + "/tally/exports", finDesk, h(async (req, res, inst) => {
 schoolRouter.get(fee + "/tally/exports", finDesk, h((_req, _res, inst) => fe3.exportLog(inst)));
 schoolRouter.get(fee + "/canteen", finDesk, h((_req, _res, inst) => fe3.canteen(inst)));
 schoolRouter.post(fee + "/canteen", finDesk, h(async (req, res, inst) => { res.status(201); return fe3.addCanteen(inst, req.body, req.user?.profileId); }));
+schoolRouter.get(fee + "/concession-types", finDesk, h((_req, _res, inst) => accFees.concessionTypes(inst)));
 schoolRouter.get(fee + "/alert-rules", finDesk, h((_req, _res, inst) => fe3.alertRules(inst)));
 schoolRouter.put(fee + "/alert-rules", adminOnly, h((req, _res, inst) => fe3.saveAlertRule(inst, req.body)));
 schoolRouter.get(fee + "/insights", finDesk, h((_req, _res, inst) => fe3.insights(inst)));
@@ -472,14 +475,14 @@ schoolRouter.put(fee + "/recon/rules", adminOnly, h((req, _res, inst) => fe4.sav
 schoolRouter.get(fee + "/recon/audit", finDesk, h((_req, _res, inst) => fe4.reconAudit(inst)));
 schoolRouter.get(fee + "/budgets", finDesk, h((_req, _res, inst) => fe4.budgets(inst)));
 schoolRouter.post(fee + "/budgets", adminOnly, h(async (req, res, inst) => { res.status(201); return fe4.addBudget(inst, req.body); }));
-schoolRouter.patch(fee + "/budgets/:id", adminOnly, h((req, _res, inst) => fe4.reviseBudget(inst, uuid(req), req.body)));
+schoolRouter.patch(fee + "/budgets/:id", finDesk, h((req, _res, inst) => fe4.reviseBudget(inst, uuid(req), req.body)));
 schoolRouter.get(fee + "/budget-actual", finDesk, h((_req, _res, inst) => fe4.budgetVsActual(inst)));
 schoolRouter.get(fee + "/cash-flow", finDesk, h((_req, _res, inst) => fe4.cashFlow(inst)));
 schoolRouter.put(fee + "/cash-flow", adminOnly, h((req, _res, inst) => fe4.saveCashPlan(inst, req.body)));
 schoolRouter.get(fee + "/fee-income", finDesk, h((_req, _res, inst) => fe4.feeIncome(inst)));
 schoolRouter.get(fee + "/claims", finDesk, h((_req, _res, inst) => fe4.claims(inst)));
 schoolRouter.post(fee + "/claims", finDesk, h(async (req, res, inst) => { res.status(201); return fe4.addClaim(inst, req.body); }));
-schoolRouter.patch(fee + "/claims/:id", finDesk, h((req, _res, inst) => fe4.moveClaim(inst, uuid(req), req.body, req.user?.role ?? "")));
+schoolRouter.patch(fee + "/claims/:id", finDesk, h((req, _res, inst) => fe4.moveClaim(inst, uuid(req), req.body, req.user?.role ?? "", req.user?.profileId)));
 schoolRouter.get(fee + "/advances", finDesk, h((_req, _res, inst) => fe4.advances(inst)));
 schoolRouter.post(fee + "/advances", finDesk, h(async (req, res, inst) => { res.status(201); return fe4.addAdvance(inst, req.body); }));
 schoolRouter.patch(fee + "/advances/:id", finDesk, h((req, _res, inst) => fe4.settleAdvance(inst, uuid(req), req.body)));
@@ -883,6 +886,9 @@ schoolRouter.get("/settings2/role-menus", adminOnly, h((req, _res, inst) => st2.
 schoolRouter.put("/settings2/role-menus", adminOnly, h((req, _res, inst) => st2.saveRoleMenus(inst, req.body)));
 schoolRouter.get("/settings2/users", adminOnly, h((req, _res, inst) => st2.users(inst)));
 schoolRouter.post("/settings2/users/:id", adminOnly, h((req, _res, inst) => st2.setUser(inst, uuid(req), req.body, req.user?.profileId)));
+schoolRouter.post("/settings2/roles", adminOnly, h(async (req, res, inst) => { res.status(201); return st2.addRole(inst, await actorName(req), req.body); }));
+schoolRouter.delete("/settings2/roles/:id", adminOnly, h(async (req, _res, inst) => st2.removeRole(inst, await actorName(req), uuid(req))));
+schoolRouter.get("/my-menu", h((req, _res, inst) => st2.myMenu(inst, req.user?.roleDisplayName ?? "")));
 schoolRouter.get("/settings2/roles", adminOnly, h((req, _res, inst) => st2.roles(inst)));
 schoolRouter.get("/settings2/integrations", adminOnly, h((req, _res, inst) => st2.integrations()));
 schoolRouter.get("/settings2/audit", adminOnly, h((req, _res, inst) => st2.audit(inst)));

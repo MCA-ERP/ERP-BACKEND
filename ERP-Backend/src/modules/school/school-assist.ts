@@ -5,6 +5,8 @@ import { runAgent } from "../admin/assist-agent";
 import type { ChatMessage } from "../admin/assist.service";
 import { MODEL, NOT_SET, limit, provider, tidy } from "../admin/assist.service";
 import * as dash from "./dashboard.service";
+import * as fe2 from "./fees2.service";
+import * as accSvc from "../accounts/accounts.service";
 import { SCHOOL_MENU } from "./school-portal-map";
 import { MENU_MODULES } from "../../lib/portal-modules";
 
@@ -18,7 +20,7 @@ export function menuFor(modules: string[] | null): string {
   for (const line of SCHOOL_MENU.split("\n")) { if (!line.startsWith(" ")) { const key = LABEL_KEY[line.trim()]; keep = !key || allowed(modules, key); } if (keep) out.push(line); }
   return out.join("\n");
 }
-const TOOL_NEEDS: Record<string, string> = { students: "students", staff: "hr", classes_and_subjects: "academics" };
+const TOOL_NEEDS: Record<string, string> = { students: "students", staff: "hr", classes_and_subjects: "academics", fee_summary: "fees", fees_overdue: "fees", attendance_today: "attendance", admissions_summary: "admission" };
 
 /**
  * The assistant inside the School Admin portal. Every tool reads only the signed-in school's own records (the school id
@@ -35,6 +37,10 @@ const TOOLS = [
   { name: "staff", description: "Staff of the school (teachers, accountants, front office and so on). tab: total, teaching or non (non-teaching). Optional search text.", parameters: { type: "object", properties: { ...filters.properties, tab: { type: "string", enum: ["total", "teaching", "non"] } } } },
   { name: "classes_and_subjects", description: "Classes with their sections, student counts and class-teacher assignments, plus the subject list.", parameters: { type: "object", properties: {} } },
   { name: "recent_activity", description: "What people did in the portal recently (the school's audit trail). tab: all or changes.", parameters: { type: "object", properties: { tab: { type: "string", enum: ["all", "changes"] }, search: { type: "string" } } } },
+  { name: "fee_summary", description: "Fee collection for this academic year: collected today and this month, outstanding, overdue students, collection rate, collection by payment method and outstanding by class, and income against expenditure.", parameters: { type: "object", properties: {} } },
+  { name: "fees_overdue", description: "Students whose fees are overdue, with class, parent, mobile, amount due and days overdue. Use for who has not paid.", parameters: { type: "object", properties: { ...filters.properties } } },
+  { name: "attendance_today", description: "Student attendance marked today and the trend this year.", parameters: { type: "object", properties: {} } },
+  { name: "admissions_summary", description: "Admissions: enquiries, applications, approved and rejected counts.", parameters: { type: "object", properties: {} } },
   { name: "portal_guide", description: "Every page of the portal with its address. Call it to explain where something is or to find an address for open_page_link.", parameters: { type: "object", properties: {} } },
   { name: "open_page_link", description: "Offer a button that opens a portal page, using an address from portal_guide.", parameters: { type: "object", properties: { href: { type: "string" }, label: { type: "string" }, go: { type: "boolean", description: "true when the person asked to open or go to the page now (in any language); false when they only asked where it is" } }, required: ["href", "label"] } },
 ] as const;
@@ -85,6 +91,18 @@ async function runTool(inst: string, name: string, input: Record<string, unknown
       const r = await dash.recentActivity(inst, { tab: str("tab") === "changes" ? "changes" : "all", search: str("search") });
       return trim(r.list.slice(0, 20).map((x) => ({ when: x.time, user: x.user, action: x.action, record: x.record })));
     }
+    if (name === "fee_summary") return trim(await accSvc.overview(inst));
+    if (name === "fees_overdue") {
+      const r = await fe2.pending(inst, "overdue");
+      if (wantsFile) {
+        if (!r.items.length) return "Nobody is overdue, so there is nothing to export.";
+        actions.push(exportOf(str("export_label") ?? "Export overdue fees", "overdue-fees", ["Student", "Admission no.", "Class", "Parent", "Mobile", "Amount due", "Days overdue"], r.items.map((x) => [x.student, x.registration_no, x.class_label, x.father, x.mobile, x.due, x.days_overdue])));
+        return trim({ exported_rows: r.items.length, note: "An export window opens. Tell the person how many rows it holds." });
+      }
+      return trim({ overdue_students: r.items.length, total_due: r.items.reduce((n, x) => n + x.due, 0), students: r.items.slice(0, 30).map((x) => ({ name: x.student, class: x.class_label, parent: x.father, mobile: x.mobile, due: x.due, days_overdue: x.days_overdue })) });
+    }
+    if (name === "attendance_today") return trim(await dash.attendanceOverview(inst));
+    if (name === "admissions_summary") return trim(await dash.admissionOverview(inst));
     if (name === "portal_guide") return menuFor(modules);
     if (name === "open_page_link") {
       const href = String(input.href ?? "");
@@ -108,7 +126,7 @@ export async function schoolChat(messages: ChatMessage[], page: string | undefin
   const school = (data as { name: string } | null)?.name ?? "the school";
   const system = [
     `You are MCA Assist, the assistant inside the School Admin portal of ${school}, on the My Class Assist school ERP. You are talking to ${roleLabel || "a staff member"} of this school. You know this portal and this school's data.`,
-    "You have read-only tools for this school's own records: students, staff, classes, subjects and recent activity. For ANY question about the school's data, call the tools and answer from what they return. Never guess or invent a number, name or date. If nothing is recorded yet (for example attendance, fees or admissions, which are not built yet), say so plainly.",
+    "You have read-only tools for this school's own records: students, staff, classes, subjects, fees (collection and overdue), attendance, admissions and recent activity. For ANY question about the school's data, call the tools and answer from what they return. Never guess or invent a number, name or date. If nothing is recorded yet, say so plainly.",
     "When the person asks for a list, file, Excel, PDF or CSV, call the tool with export=true. You cannot change anything: for actions, say which page to open and what to click.",
     "When someone tells you to open or go to a page (in English, Hindi or Telugu, typed or spoken), call portal_guide if you need the address, then open_page_link with go=true, and confirm in one short line. Do not say a page is open unless you called the tool. When someone asks how to open or find a page, answer in one line with the bold path (for example: Open **Dashboard → Student Statistics**.), call open_page_link once with go=false, and add nothing else.",
     "Answer directly and briefly in plain language. Write **bold** around page names and menu paths, joined with arrows. Use short lines or simple lists; never markdown tables, pipes or headings, and never write HTML. Reply in the language the person wrote or spoke in (English, Hindi or Telugu); keep page names in English. Never show ids or UUIDs. Dates like 12 Oct 2026. Call tools only through the tool-calling mechanism and never write a tool call into your answer.",

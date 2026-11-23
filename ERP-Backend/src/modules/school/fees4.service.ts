@@ -312,14 +312,16 @@ export async function addClaim(inst: string, input: unknown) {
   if (i.amount > rule.receipt_above && i.receipts < 1) throw new HttpError(400, `A receipt is needed above ${inr(rule.receipt_above)}.`);
   return check(await supabaseAdmin.from("staff_claims").insert({ institution_id: inst, ...i, description: i.description ?? "" }).select("id, code").single());
 }
-export async function moveClaim(inst: string, id: string, input: unknown, role: string) {
+export async function moveClaim(inst: string, id: string, input: unknown, role: string, actor?: string) {
   const { action } = z.object({ action: z.enum(["approve", "reject", "pay"]) }).strict().parse(input);
-  const c = check(await supabaseAdmin.from("staff_claims").select("id, ctype, amount, status").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; ctype: string; amount: number; status: string } | null;
+  const c = check(await supabaseAdmin.from("staff_claims").select("id, ctype, amount, status, staff_id").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; ctype: string; amount: number; status: string; staff_id: string } | null;
   if (!c) throw new HttpError(404, "Not found.");
+  if (actor && c.staff_id === actor) throw new HttpError(403, "You can't decide your own claim. Ask the Principal or the School Admin.");
   const rule = (await claimRules(inst)).items.find((r) => r.ctype === c.ctype); const top = ["Principal", "InstitutionAdmin"]; const lead = [...top, "VicePrincipal"];
   if (action === "pay") { if (c.status !== "Approved") throw new HttpError(409, "Approve the claim before paying it."); if (![...lead, "Accountant", "Finance"].includes(role)) throw new HttpError(403, "Only accounts or the principal can pay a claim."); check(await supabaseAdmin.from("staff_claims").update({ status: "Paid", paid_on: today() }).eq("id", id).eq("institution_id", inst).select("id")); return { ok: true }; }
   if (!["Submitted", "HOD approved"].includes(c.status)) throw new HttpError(409, "That was already decided.");
-  const allowed = c.status === "HOD approved" || c.amount > (rule?.limit_amount ?? 0) || rule?.approver === "Principal" ? top : rule?.approver === "Accountant" ? [...lead, "Accountant"] : lead;
+  // accounts checks the bills on every claim within its limit; anything above the limit, or a Principal-only type, goes to the Principal
+  const allowed = c.status === "HOD approved" || c.amount > (rule?.limit_amount ?? 0) || rule?.approver === "Principal" ? top : [...lead, "Accountant"];
   if (!allowed.includes(role)) throw new HttpError(403, "You can't decide this claim.");
   const next = action === "reject" ? "Rejected" : c.status === "Submitted" && rule?.approver.includes("then") ? "HOD approved" : "Approved";
   check(await supabaseAdmin.from("staff_claims").update({ status: next }).eq("id", id).eq("institution_id", inst).select("id"));

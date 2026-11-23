@@ -328,9 +328,10 @@ export async function concessions(inst: string) {
   return { students: ro.items.filter((r) => r.status === "Enrolled").map((r) => ({ id: r.id, name: r.name, class_label: r.class_label })), items: (check(rows) as { id: string; code: string; student_id: string; ctype: string; reason: string; amount: number; requested_on: string; status: string; source: string }[]).map((x) => ({ ...x, student: k.get(x.student_id)?.name ?? "", class_label: k.get(x.student_id)?.class_label ?? "" })) };
 }
 export async function addConcession(inst: string, input: unknown) {
-  const i = z.object({ student_id: uid, ctype: z.enum(["Scholarship", "Sibling", "Staff ward", "Financial aid", "Discount", "Fee waiver", "Other"]), reason: z.string().trim().max(200).optional(), amount: z.number().int().min(1).max(10_000_000), source: z.enum(["Office", "Parent"]).optional() }).strict().parse(input);
+  const i = z.object({ student_id: uid, ctype: z.enum(["Scholarship", "Sibling", "Staff ward", "Financial aid", "Discount", "Fee waiver", "Other"]), reason: z.string().trim().max(200).optional(), amount: z.number().int().min(1).max(10_000_000), source: z.enum(["Office", "Parent"]).optional(), type_name: z.string().trim().max(60).optional() }).strict().parse(input);
+  if (i.type_name && !(check(await supabaseAdmin.from("fee_concession_types").select("id").eq("institution_id", inst).eq("name", i.type_name).limit(1)) as unknown[]).length) throw new HttpError(400, "Choose one of the school's concession types.");
   if (!(await roster(inst)).items.some((r) => r.id === i.student_id)) throw new HttpError(404, "Student not found.");
-  return check(await supabaseAdmin.from("fee_concessions").insert({ institution_id: inst, student_id: i.student_id, ctype: i.ctype, reason: i.reason ?? "", amount: i.amount, source: i.source ?? "Office", requested_on: today(), status: i.source === "Parent" ? "Under review" : "Pending" }).select("id, code").single());
+  return check(await supabaseAdmin.from("fee_concessions").insert({ institution_id: inst, student_id: i.student_id, ctype: i.ctype, reason: i.reason ?? "", amount: i.amount, type_name: i.type_name ?? null, source: i.source ?? "Office", requested_on: today(), status: i.source === "Parent" ? "Under review" : "Pending" }).select("id, code").single());
 }
 export async function decideConcession(inst: string, id: string, input: unknown) {
   const { status } = z.object({ status: z.enum(["Approved", "Rejected", "Info asked"]) }).strict().parse(input);
