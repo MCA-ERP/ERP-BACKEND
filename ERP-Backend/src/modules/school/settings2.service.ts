@@ -5,6 +5,7 @@ import { HttpError } from "../../lib/http-error";
 import { getSettings, saveSettings } from "./settings.service";
 import { profile } from "./custom.service";
 import { roster } from "./student-mgmt.service";
+import { createRole, deleteRole } from "../admin/roles-mgmt.service";
 
 /** Communication settings, integrations, users, roles, approvals, notification rules, numbering, audit and DPDP. */
 const one = <T>(v: T | T[] | null | undefined): T | null => (Array.isArray(v) ? (v[0] ?? null) : (v ?? null));
@@ -44,14 +45,31 @@ export async function saveLevels(inst: string, input: unknown) {
   check(await supabaseAdmin.from("school_settings").upsert({ institution_id: inst, key: "approval_levels", value: { rows }, updated_at: new Date().toISOString() }).select("key")); return { rows };
 }
 const MENU_ROLES = ["School Admin", "Principal", "Accountant", "Receptionist", "Teacher", "Librarian", "Transport Manager"];
+type RoleRow = { id: string; name: string; display_name: string; description: string | null; is_system_default: boolean; institution_id: string | null; scope: string };
+/** Roles this school can use: the platform's school roles and the ones made for this school (never another school's, never platform roles). */
+async function schoolRoles(inst: string) {
+  const r = check(await supabaseAdmin.from("roles").select("id, name, display_name, description, is_system_default, institution_id, scope").eq("scope", "school").order("display_name")) as RoleRow[];
+  return r.filter((x) => STAFF_ROLE(x.name) && (x.institution_id === null || x.institution_id === inst));
+}
+/** A role the school (or the platform team) added: not one of the built-in menu roles. It gets a menu column of its own. */
+const isCustom = (x: RoleRow) => !x.is_system_default && !MENU_ROLES.includes(x.display_name);
 export async function roleMenus(inst: string) {
-  const r = check(await supabaseAdmin.from("school_settings").select("value").eq("institution_id", inst).eq("key", "role_menu").maybeSingle()) as { value: Record<string, string[]> } | null;
-  return { roles: MENU_ROLES, map: r?.value ?? null };
+  const [r, rs] = await Promise.all([supabaseAdmin.from("school_settings").select("value").eq("institution_id", inst).eq("key", "role_menu").maybeSingle(), schoolRoles(inst)]);
+  const map = (check(r) as { value: Record<string, string[]> } | null)?.value ?? null;
+  const custom = rs.filter(isCustom).map((x) => x.display_name);
+  return { roles: [...MENU_ROLES, ...custom], custom, map };
 }
 export async function saveRoleMenus(inst: string, input: unknown) {
-  const { map } = z.object({ map: z.record(z.string(), z.array(z.string().max(40)).max(40)) }).strict().parse(input);
-  if (Object.keys(map).some((k) => !MENU_ROLES.includes(k))) throw new HttpError(400, "Unknown role."); map["School Admin"] = map["School Admin"] ?? [];
+  const { map } = z.object({ map: z.record(z.string(), z.array(z.string().max(40)).max(60)) }).strict().parse(input);
+  const known = new Set((await roleMenus(inst)).roles);
+  if (Object.keys(map).some((k) => !known.has(k))) throw new HttpError(400, "Unknown role."); map["School Admin"] = map["School Admin"] ?? [];
   check(await supabaseAdmin.from("school_settings").upsert({ institution_id: inst, key: "role_menu", value: map, updated_at: new Date().toISOString() }).select("key")); return { ok: true };
+}
+/** The menus the signed-in person may see. null means all of them (built-in roles keep their usual access); a custom role sees only what its column allows once its menus have been saved. */
+export async function myMenu(inst: string, roleDisplay: string) {
+  const { custom, map } = await roleMenus(inst);
+  if (!custom.includes(roleDisplay)) return { allowed: null as string[] | null };
+  return { allowed: (map?.[roleDisplay] ?? null) as string[] | null };
 }
 
 // ═════════════ users and roles ═════════════
@@ -68,8 +86,26 @@ export async function setUser(inst: string, id: string, input: unknown, actor?: 
   await supabaseAdmin.from("audit_logs").insert({ actor_id: actor ?? null, action: active ? "ACTIVATE_USER" : "DEACTIVATE_USER", entity_name: "user", entity_id: id, institution_id: inst }); return { ok: true };
 }
 export async function roles(inst: string) {
-  const [r, u] = await Promise.all([supabaseAdmin.from("roles").select("id, name, display_name, description").order("display_name"), users(inst)]);
-  return { items: (check(r) as { id: string; name: string; display_name: string; description: string | null }[]).filter((x) => STAFF_ROLE(x.name)).map((x) => ({ ...x, users: u.items.filter((y) => y.role === x.display_name).length })) };
+  const [rs, u] = await Promise.all([schoolRoles(inst), users(inst)]);
+  return { items: rs.map((x) => ({ id: x.id, name: x.name, display_name: x.display_name, description: x.description, users: u.items.filter((y) => y.role === x.display_name).length, custom: isCustom(x), own: x.institution_id === inst })) };
+}
+export async function addRole(inst: string, actor: { profileId?: string; name: string }, input: unknown) {
+  const i = z.object({ display_name: z.string().trim().min(3, "Give the role a name of at least 3 letters.").max(100), description: z.string().trim().max(500).optional(), copy_menus_from: z.string().trim().max(100).optional() }).strict().parse(input);
+  const role = await createRole({ display_name: i.display_name, description: i.description || null, scope: "school", institution_id: inst, data_scope: "school" } as never, actor as never);
+  // the new role starts with the Dashboard only, or with the menus of the role it was copied from
+  const { map } = await roleMenus(inst);
+  const base = i.copy_menus_from ? map?.[i.copy_menus_from] ?? [] : [];
+  const next = { ...(map ?? {}), [i.display_name]: base.length ? base : ["dashboard"] };
+  check(await supabaseAdmin.from("school_settings").upsert({ institution_id: inst, key: "role_menu", value: next, updated_at: new Date().toISOString() }).select("key"));
+  return { id: (role as { id: string }).id, display_name: i.display_name };
+}
+export async function removeRole(inst: string, actor: { profileId?: string; name: string }, id: string) {
+  const own = (await schoolRoles(inst)).find((x) => x.id === id);
+  if (!own || own.institution_id !== inst) throw new HttpError(403, "Only a role added for this school can be deleted here.");
+  const r = await deleteRole(id, actor as never);
+  const { map } = await roleMenus(inst);
+  if (map && own.display_name in map) { const next = { ...map }; delete next[own.display_name]; check(await supabaseAdmin.from("school_settings").upsert({ institution_id: inst, key: "role_menu", value: next, updated_at: new Date().toISOString() }).select("key")); }
+  return r;
 }
 
 // ═════════════ integrations ═════════════

@@ -313,12 +313,12 @@ export async function helpCategories(inst: string) {
   return { items: rows.map((c) => ({ name: c.name, handled_by: c.handled_by, reply_hours: c.reply_hours })) };
 }
 
-export async function raiseTicket(inst: string, me: string, input: unknown) {
+export async function raiseTicket(inst: string, me: string, input: unknown, kind: "Teacher" | "Staff" = "Teacher") {
   const i = z.object({ category: z.string().trim().min(1).max(80), subject: z.string().trim().min(3, "Write the subject.").max(250), details: z.string().trim().min(3, "Tell us what happened.").max(4000), priority: z.enum(["High", "Normal", "Low"]).default("Normal"), attachment_name: z.string().trim().max(160).optional() }).strict().parse(input);
   const cat = (await categories(inst)).find((c) => c.name === i.category && c.raised_by === "Staff");
   if (!cat) throw new HttpError(400, "Choose one of the listed topics.");
   const who = await whoAmI(inst, me);
-  const row = check(await supabaseAdmin.from("hd_tickets").insert({ institution_id: inst, subject: i.subject, category: i.category, raised_by_name: who.name, raised_by_kind: "Teacher", priority: i.priority, assigned_name: cat.handled_by, created_by: me, details: i.details, attachment_name: i.attachment_name || null }).select("id, code").single()) as { id: string; code: string };
+  const row = check(await supabaseAdmin.from("hd_tickets").insert({ institution_id: inst, subject: i.subject, category: i.category, raised_by_name: who.name, raised_by_kind: kind, priority: i.priority, assigned_name: cat.handled_by, created_by: me, details: i.details, attachment_name: i.attachment_name || null }).select("id, code").single()) as { id: string; code: string };
   return { id: row.id, code: row.code, handled_by: cat.handled_by, reply_hours: cat.reply_hours };
 }
 
