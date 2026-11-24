@@ -91,10 +91,10 @@ const REGISTERS: Record<string, Reg> = {
   },
   "adm-enquiries": {
     table: "adm_enquiries",
-    select: "id, code, child, class_sought, parent_name, mobile, source, counsellor, enquiry_date, status, created_at, staff:counsellor(first_name, last_name)",
+    select: "id, code, child, class_sought, parent_name, mobile, source, counsellor, enquiry_date, status, dob, gender, email, notes, interest, next_followup, closed_reason, created_at, staff:counsellor(first_name, last_name)",
     order: ["enquiry_date", "created_at"],
     filters: ["status"],
-    create: z.object({ child: txt(150).min(1, "Enter the child's name."), class_sought: txt(30).min(1), parent_name: txt(150).min(1, "Enter the parent's name."), mobile: opt(txt(30)), source: txt(40).min(1), counsellor: opt(z.string().uuid()), enquiry_date: date.optional() }).strict(),
+    create: z.object({ child: txt(150).min(1, "Enter the child's name."), class_sought: txt(30).min(1), parent_name: txt(150).min(1, "Enter the parent's name."), mobile: opt(txt(30)), source: txt(40).min(1), counsellor: opt(z.string().uuid()), enquiry_date: date.optional(), dob: opt(date), gender: opt(z.enum(["Female", "Male", "Other"])), email: opt(txt(150)), notes: opt(txt(500)) }).strict(),
     patch: z.object({ status: z.enum(["New", "Follow-up", "Converted", "Closed"]) }).partial().strict(),
   },
   "adm-applications": {
@@ -237,10 +237,12 @@ export async function staffChoices(inst: string) {
 
 /** Turns an admission enquiry into an application and marks the enquiry Converted. */
 export async function convertEnquiry(inst: string, id: string, actor?: string) {
-  const e = check(await supabaseAdmin.from("adm_enquiries").select("id, child, class_sought, parent_name, mobile, source, status").eq("id", id).eq("institution_id", inst).maybeSingle()) as { child: string; class_sought: string; parent_name: string; mobile: string | null; source: string; status: string } | null;
+  const e = check(await supabaseAdmin.from("adm_enquiries").select("id, child, class_sought, parent_name, mobile, source, status, dob, gender, email, notes").eq("id", id).eq("institution_id", inst).maybeSingle()) as { child: string; class_sought: string; parent_name: string; mobile: string | null; source: string; status: string; dob: string | null; gender: string | null; email: string | null; notes: string | null } | null;
   if (!e) throw new HttpError(404, "Enquiry not found.");
   if (e.status === "Converted") throw new HttpError(409, "That enquiry was already converted.");
-  const app = check(await supabaseAdmin.from("adm_applications").insert({ institution_id: inst, child: e.child, class_sought: e.class_sought, parent_name: e.parent_name, mobile: e.mobile, source: e.source, enquiry_id: id, created_by: actor ?? null }).select(REGISTERS["adm-applications"].select).single()) as unknown as Record<string, unknown>;
+  // what the enquiry already knows goes into the application, so the family is not asked again
+  const details = Object.fromEntries(Object.entries({ dob: e.dob, gender: e.gender, email: e.email, notes: e.notes }).filter(([, v]) => v));
+  const app = check(await supabaseAdmin.from("adm_applications").insert({ institution_id: inst, child: e.child, class_sought: e.class_sought, parent_name: e.parent_name, mobile: e.mobile, source: e.source, details, enquiry_id: id, created_by: actor ?? null }).select(REGISTERS["adm-applications"].select).single()) as unknown as Record<string, unknown>;
   check(await supabaseAdmin.from("adm_enquiries").update({ status: "Converted" }).eq("id", id).eq("institution_id", inst).select("id"));
   return app;
 }
@@ -325,10 +327,14 @@ export async function approvalLevels(inst: string) {
 }
 
 /** Moves an application along the approval chain. Level 3 approving makes the offer (status Approved). */
-export async function advance(inst: string, id: string, body: unknown) {
+const LEVEL_ROLES: Record<number, string[]> = { 1: ["InstitutionAdmin", "Principal", "VicePrincipal", "AdmissionsHead", "Registrar", "Receptionist"], 2: ["InstitutionAdmin", "Principal", "VicePrincipal", "AdmissionsHead", "Registrar"], 3: ["InstitutionAdmin", "Principal", "VicePrincipal"] };
+
+/** Who may decide at each level of the approval chain: the last level is the Principal's (or the School Admin's). `role` is the signed-in user's role; leave it out only for trusted server code. */
+export async function advance(inst: string, id: string, body: unknown, role?: string) {
   const { action } = z.object({ action: z.enum(["approve", "send-back", "waitlist", "reject", "correct"]) }).strict().parse(body);
   const app = check(await supabaseAdmin.from("adm_applications").select("id, status, level").eq("id", id).eq("institution_id", inst).maybeSingle()) as { status: string; level: number } | null;
   if (!app) throw new HttpError(404, "Application not found.");
+  if (role && role !== "SuperAdmin" && action !== "correct" && app.status === "Under review" && !LEVEL_ROLES[app.level]?.includes(role)) throw new HttpError(403, `Level ${app.level} of the approval chain is not yours to decide.`);
   const now = new Date().toISOString();
   let update: Record<string, unknown>;
   if (action === "correct") { if (app.status !== "Returned") throw new HttpError(400, "Only a returned application can be marked corrected."); update = { status: "Under review", level: 1, level_since: now }; }
@@ -378,12 +384,14 @@ export async function allocate(inst: string, id: string, body: unknown) {
   if (app.status !== "Registered" || !app.admission_no) throw new HttpError(400, "Give the child an admission number first.");
   const dob = app.details?.dob;
   if (!dob) throw new HttpError(400, "The application has no date of birth. Add it to the application first.");
-  const sec = check(await supabaseAdmin.from("sections").select("id").eq("id", input.section_id).eq("institution_id", inst).eq("grade_id", input.grade_id).eq("academic_year_id", input.academic_year_id).maybeSingle());
+  const sec = check(await supabaseAdmin.from("sections").select("id, name, capacity").eq("id", input.section_id).eq("institution_id", inst).eq("grade_id", input.grade_id).eq("academic_year_id", input.academic_year_id).maybeSingle()) as { name: string; capacity: number } | null;
   if (!sec) throw new HttpError(400, "That section does not belong to the chosen class and year.");
+  const seated = (await supabaseAdmin.from("student_enrollments").select("id", { count: "exact", head: true }).eq("institution_id", inst).eq("academic_year_id", input.academic_year_id).eq("section_id", input.section_id)).count ?? 0;
+  if (seated >= sec.capacity) throw new HttpError(409, `Section ${sec.name} is full (${sec.capacity} seats). Choose another section.`);
   const taken = check(await supabaseAdmin.from("student_enrollments").select("id").eq("institution_id", inst).eq("academic_year_id", input.academic_year_id).eq("section_id", input.section_id).eq("roll_no", input.roll_no).limit(1)) as unknown[];
   if (taken.length) throw new HttpError(409, "That roll number is already used in the section.");
   const gender = /^m/i.test(app.details?.gender ?? "") ? "Male" : /^f/i.test(app.details?.gender ?? "") ? "Female" : "Other";
-  const [first, ...rest] = app.child.trim().split(/s+/);
+  const [first, ...rest] = app.child.trim().split(/\s+/);
   const student = check(await supabaseAdmin.from("students").insert({ institution_id: inst, registration_no: app.admission_no, roll_no: input.roll_no, first_name: first, last_name: rest.join(" ") || "-", gender, date_of_birth: dob, status: "Enrolled" }).select("id").single()) as { id: string };
   try {
     check(await supabaseAdmin.from("student_enrollments").insert({ institution_id: inst, student_id: student.id, academic_year_id: input.academic_year_id, grade_id: input.grade_id, section_id: input.section_id, roll_no: input.roll_no }).select("id"));
@@ -395,4 +403,16 @@ export async function allocate(inst: string, id: string, body: unknown) {
     throw err;
   }
   return check(await supabaseAdmin.from("adm_applications").update({ status: "Allocated" }).eq("id", id).eq("institution_id", inst).select(REGISTERS["adm-applications"].select).single());
+}
+
+/** The application form fee for a class, from the Admission Fee Setup. */
+export async function formFee(inst: string, cls: string) {
+  const fees = (await feeSetup(inst)).rows;
+  return fees[Math.min(groupOf(cls), fees.length - 1)]?.form_fee ?? 0;
+}
+
+/** The admission fee, caution deposit and form fee for a class, from the Admission Fee Setup. */
+export async function admissionFees(inst: string, cls: string) {
+  const fees = (await feeSetup(inst)).rows;
+  return fees[Math.min(groupOf(cls), fees.length - 1)];
 }

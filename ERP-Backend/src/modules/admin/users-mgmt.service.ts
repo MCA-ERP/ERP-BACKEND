@@ -18,7 +18,7 @@ export const GROUPS = {
   principal: { label: "Principals", roles: ["Principal"], platform: false },
   teachers: { label: "Teachers", roles: ["Faculty", "ClassTeacher", "HOD"], platform: false },
   accountants: { label: "Accountants", roles: ["Accountant"], platform: false },
-  other_staff: { label: "Other staff", roles: ["Registrar", "HR", "Librarian"], platform: false },
+  other_staff: { label: "Other staff", roles: ["Registrar", "AdmissionsHead", "HR", "Librarian"], platform: false },
   students: { label: "Students", roles: ["Student"], platform: false },
   parents: { label: "Parents", roles: ["Parent"], platform: false },
 } as const;
