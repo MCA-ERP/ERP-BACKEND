@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "../../../db/client";
+import { scopeRule } from "../../lib/assist-scope";
 import { HttpError } from "../../lib/http-error";
 import type { AssistAction } from "../admin/assist-actions";
 import { runAgent } from "../admin/assist-agent";
@@ -132,6 +133,7 @@ export async function schoolChat(messages: ChatMessage[], page: string | undefin
     "Answer directly and briefly in plain language. Write **bold** around page names and menu paths, joined with arrows. Use short lines or simple lists; never markdown tables, pipes or headings, and never write HTML. Reply in the language the person wrote or spoke in (English, Hindi or Telugu); keep page names in English. Never show ids or UUIDs. Dates like 12 Oct 2026. Call tools only through the tool-calling mechanism and never write a tool call into your answer.",
     modules === null ? "" : `This school's plan currently includes only these parts of the portal: ${Object.keys(LABEL_KEY).filter((l) => allowed(modules, LABEL_KEY[l])).concat(["Dashboard", "My Profile", "My Work", "Reports & Analytics", "School Settings"]).join(", ")}. Anything else (for example ${Object.keys(LABEL_KEY).filter((l) => !allowed(modules, LABEL_KEY[l])).slice(0, 4).join(", ") || "nothing"}) is NOT available to this school: say it is not part of their plan, never describe it, open it or look it up.`,
     page ? `The person is currently on: ${page}` : "",
+  scopeRule("School Admin portal", "this school's own records and how to use the portal", "other schools, platform billing or Super Admin settings"),
   ].filter(Boolean).join("\n\n");
 
   try {

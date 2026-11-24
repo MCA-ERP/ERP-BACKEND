@@ -8,6 +8,7 @@ import { actorName } from "../../lib/actor";
 import * as a from "./admissions.service";
 import * as s from "./admissions-selection.service";
 import * as ob from "./admissions-onboard.service";
+import * as ap from "../applicant/applicant.service";
 import { admissionsChat } from "./admissions-assist";
 import { transcribe as transcribeAudio } from "../admin/assist.service";
 import * as t from "../teacher/teacher.service";
@@ -87,6 +88,14 @@ admissionsRouter.get("/selection/results", h(({ inst }) => s.resultsToEnter(inst
 admissionsRouter.post("/selection/:id/result", h(({ inst, req }) => s.enterResult(inst, uuid(req), req.body)));
 admissionsRouter.get("/waitlisted-rejected", h(({ inst }) => s.waitlistedRejected(inst)));
 admissionsRouter.post("/waitlisted-rejected/:id/approve", h(({ inst, req }) => s.approveWaitlisted(inst, uuid(req))));
+
+// ── the Applicant portal's other side: families' messages, the visit and assessment slots they book, documents sent back ──
+admissionsRouter.get("/family/threads", h(({ inst }) => ap.staffThreads(inst)));
+admissionsRouter.post("/family/reply", h(({ inst, me, req }) => ap.staffReply(inst, me, req.body), 201));
+admissionsRouter.get("/family/slots", h(({ inst }) => ap.staffSlots(inst)));
+admissionsRouter.post("/family/slots", h(({ inst, me, req }) => ap.staffAddSlots(inst, me, req.body), 201));
+admissionsRouter.delete("/family/slots/:id", h(({ inst, req }) => ap.staffDeleteSlot(inst, uuid(req))));
+admissionsRouter.post("/family/documents/:id/return", h(({ inst, req }) => ap.staffReturnDocument(inst, uuid(req), req.body)));
 
 // ── fee assignment, registration, class allocation, admitted, reports ──
 admissionsRouter.get("/fee-assignment", h(({ inst }) => ob.feeAssignment(inst)));
