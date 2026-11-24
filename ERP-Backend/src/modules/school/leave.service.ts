@@ -41,11 +41,12 @@ export function countDays(from: string, to: string, half: boolean): number {
 
 export async function myLeave(inst: string, profileId: string) {
   const year = leaveYear();
-  const [pol, requests, who, principal] = await Promise.all([
+  const [pol, requests, who, principal, admin] = await Promise.all([
     policies(inst),
     supabaseAdmin.from("leave_requests").select("id, leave_type, from_date, to_date, half_day, days, reason, cover_note, status, created_at").eq("profile_id", profileId).gte("from_date", year.start).lte("from_date", year.end).order("from_date", { ascending: false }),
-    supabaseAdmin.from("user_profiles").select("first_name, last_name, roles:role_id(display_name)").eq("id", profileId).maybeSingle(),
+    supabaseAdmin.from("user_profiles").select("first_name, last_name, roles:role_id(name, display_name)").eq("id", profileId).maybeSingle(),
     supabaseAdmin.from("user_profiles").select("first_name, last_name, roles:role_id!inner(name)").eq("institution_id", inst).eq("roles.name", "Principal").limit(1),
+    supabaseAdmin.from("user_profiles").select("first_name, last_name, roles:role_id!inner(name)").eq("institution_id", inst).eq("roles.name", "InstitutionAdmin").limit(1),
   ]);
   const list = (requests.data ?? []) as { id: string; leave_type: LeaveType; from_date: string; to_date: string; half_day: boolean; days: number; reason: string; cover_note: string | null; status: string; created_at: string }[];
   const balance = pol.map((p) => {
@@ -53,12 +54,14 @@ export async function myLeave(inst: string, profileId: string) {
     const pending = list.filter((r) => r.leave_type === p.leave_type && r.status === "Pending").reduce((s, r) => s + Number(r.days), 0);
     return { type: p.leave_type, allowed: Number(p.allowed_days), taken, pending, balance: Number(p.allowed_days) - taken - pending, details: p.details };
   });
-  const person = who.data as { first_name: string; last_name: string; roles: { display_name: string } | { display_name: string }[] | null } | null;
+  const person = who.data as { first_name: string; last_name: string; roles: { name: string; display_name: string } | { name: string; display_name: string }[] | null } | null;
+  const isPrincipal = (Array.isArray(person?.roles) ? person?.roles[0] : person?.roles)?.name === "Principal";
+  const a0 = ((admin.data ?? []) as { first_name: string; last_name: string }[])[0];
   const p0 = ((principal.data ?? []) as { first_name: string; last_name: string }[])[0];
   return {
     year: year.label,
     person: person ? { name: `${person.first_name} ${person.last_name}`.trim(), role: (Array.isArray(person.roles) ? person.roles[0] : person.roles)?.display_name ?? "" } : null,
-    approver: p0 ? `${p0.first_name} ${p0.last_name}`.trim() + " (Principal)" : "the school administrator",
+    approver: isPrincipal ? (a0 ? `${a0.first_name} ${a0.last_name}`.trim() + " (School Admin)" : "the school administrator") : p0 ? `${p0.first_name} ${p0.last_name}`.trim() + " (Principal)" : "the school administrator",
     balance,
     requests: list,
     policy: [

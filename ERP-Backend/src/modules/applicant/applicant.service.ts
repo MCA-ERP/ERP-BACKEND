@@ -54,7 +54,7 @@ export async function me(inst: string, profile: string) {
   const docs = apps.length ? (check(await supabaseAdmin.from("adm_documents").select("application_id, status").eq("institution_id", inst).in("application_id", apps.map((a) => a.id))) as { status: string }[]) : [];
   const first = apps[0];
   return {
-    name: nameOf(f), email: f.email, school: check(school) as { name: string; code: string },
+    name: nameOf(f), email: f.email, school: { ...(check(school) as { name: string; code: string }), logo: ((await supabaseAdmin.from("school_profile").select("logo").eq("institution_id", inst).maybeSingle()).data as { logo: string | null } | null)?.logo ?? null },
     line: first ? `Applying for ${first.child.split(" ")[0]} · ${classOnly(first.class_sought)}` : "No application yet",
     badges: { documents: docs.filter((d) => d.status === "Returned").length, unread: n.unread },
   };

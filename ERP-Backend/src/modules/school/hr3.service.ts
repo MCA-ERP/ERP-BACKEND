@@ -62,8 +62,10 @@ export async function leaveApprovals(inst: string) {
 }
 export async function decideLeaveStep(inst: string, id: string, input: unknown, role: string, actor?: string) {
   const { action } = z.object({ action: z.enum(["approve", "send_back"]) }).strict().parse(input);
-  const r = check(await supabaseAdmin.from("leave_requests").select("id, days, level, status").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; days: number; level: number; status: string } | null;
+  const r = check(await supabaseAdmin.from("leave_requests").select("id, days, level, status, profile_id").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; days: number; level: number; status: string; profile_id: string } | null;
   if (!r) throw new HttpError(404, "Not found."); if (r.status !== "Pending") throw new HttpError(409, "That was already decided.");
+  if (actor && r.profile_id === actor) throw new HttpError(403, "You cannot decide your own leave.");
+  if (role === "Principal" || role === "VicePrincipal") { const who = check(await supabaseAdmin.from("user_profiles").select("roles:role_id(name)").eq("id", r.profile_id).eq("institution_id", inst).maybeSingle()) as unknown as { roles: { name: string } | { name: string }[] | null } | null; if (one(who?.roles ?? null)?.name === "Principal") throw new HttpError(403, "The Principal's leave goes to the School Admin."); }
   const allowed = r.level >= 3 ? ["Principal", "InstitutionAdmin"] : ["VicePrincipal", "Principal", "InstitutionAdmin"];
   if (!allowed.includes(role)) throw new HttpError(403, `Only the ${SHORT[r.level - 1].toLowerCase()} can decide this leave now.`);
   const need = needed(Number(r.days));
