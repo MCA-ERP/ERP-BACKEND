@@ -21,7 +21,9 @@ export async function getInstitution(institutionId: string | null) {
   const { data, error } = await q.maybeSingle();
   if (error) throw new HttpError(500, error.message);
   if (!data) throw new HttpError(404, "Institution not found.");
-  return data;
+  // the logo the School Admin uploaded (School Settings > School Profile > Logo): every portal shows it in place of the platform's own
+  const prof = await supabaseAdmin.from("school_profile").select("logo").eq("institution_id", data.id).maybeSingle();
+  return { ...data, logo: (prof.data as { logo: string | null } | null)?.logo ?? null };
 }
 
 /** All institutions (SuperAdmin directory). */
