@@ -74,8 +74,8 @@ export async function designationsFromStaff(inst: string) {
 }
 
 // ═════════════ registration ═════════════
-const ROLES = ["Faculty", "ClassTeacher", "Accountant", "Librarian", "Receptionist", "SchoolNurse", "Counsellor", "TransportManager", "MessManager", "StoreIncharge", "ExamCoordinator", "HR", "Registrar", "FrontOfficeSecurity"] as const;
-const roleFor = (type: string, designation: string) => (type === "Teaching" ? "Faculty" : /accountant/i.test(designation) ? "Accountant" : /librarian/i.test(designation) ? "Librarian" : /nurse/i.test(designation) ? "SchoolNurse" : /counsel/i.test(designation) ? "Counsellor" : /registrar/i.test(designation) ? "Registrar" : "Receptionist");
+const ROLES = ["Faculty", "ClassTeacher", "Accountant", "Librarian", "Receptionist", "SchoolNurse", "Counsellor", "TransportManager", "MessManager", "StoreIncharge", "ExamCoordinator", "HR", "Registrar", "AdmissionsHead", "FrontOfficeSecurity"] as const;
+const roleFor = (type: string, designation: string) => (type === "Teaching" ? "Faculty" : /accountant/i.test(designation) ? "Accountant" : /librarian/i.test(designation) ? "Librarian" : /nurse/i.test(designation) ? "SchoolNurse" : /counsel/i.test(designation) ? "Counsellor" : /admission/i.test(designation) ? "AdmissionsHead" : /registrar/i.test(designation) ? "Registrar" : "Receptionist");
 const typeFor = (designation: string) => (/teacher|pgt|tgt|prt|faculty|lecturer|professor/i.test(designation) ? "Teaching" : "Non-teaching");
 const empInput = z.object({ name: z.string().trim().min(2, "Enter the name.").max(120), email: z.string().trim().toLowerCase().email("Enter a valid email."), mobile: z.string().trim().max(30).optional(), department: z.string().trim().max(60).optional(), designation: z.string().trim().max(100).optional(), staff_type: z.enum(["Teaching", "Non-teaching"]), role: z.string().trim().min(2).max(50).optional(), joined_on: date.nullable().optional(), gender: z.enum(["Male", "Female", "Other"]).nullable().optional(), date_of_birth: date.nullable().optional(), monthly_salary: z.number().int().min(0).max(10_000_000).nullable().optional(), qualification: z.string().trim().max(120).optional(), pan: z.string().trim().toUpperCase().regex(/^([A-Z]{5}[0-9]{4}[A-Z])?$/, "PAN looks like ABCDE1234F.").optional(), emp_code: z.string().trim().max(20).optional() }).strict();
 /** Roles added for this school (or by the platform team) that staff can be given a login with. */
@@ -118,7 +118,7 @@ export async function bulkImport(inst: string, input: unknown, actorRole: string
 }
 export async function registrationLists(inst: string) {
   const [d, g] = await Promise.all([departments(inst), designations(inst)]);
-  return { departments: d.items.filter((x) => x.status === "Active").map((x) => x.name), designations: g.items.filter((x) => x.status === "Active").map((x) => x.name), roles: [...ROLES, ...(await customRoleNames(inst))] };
+  return { departments: d.items.filter((x) => x.status === "Active").map((x) => x.name), designations: g.items.filter((x) => x.status === "Active").map((x) => x.name), roles: [...new Set<string>([...ROLES, ...(await customRoleNames(inst))])] };
 }
 
 // ═════════════ employee profile ═════════════

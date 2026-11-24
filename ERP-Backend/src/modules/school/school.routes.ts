@@ -139,7 +139,7 @@ schoolRouter.get("/front-office/admission/fee-setup", desk, h(async (_req, _res,
 schoolRouter.put("/front-office/admission/fee-setup", desk, h(async (req, _res, inst) => fo.saveFeeSetup(inst, req.body)));
 schoolRouter.get("/front-office/admission/levels", desk, h(async (_req, _res, inst) => ({ items: await fo.approvalLevels(inst) })));
 schoolRouter.post("/front-office/admission/fee-collect", desk, h(async (req, res, inst) => { res.status(201); return { item: await fo.collectAdmissionFee(inst, req.body, req.user?.profileId) }; }));
-schoolRouter.post("/front-office/adm-applications/:id/advance", desk, h(async (req, _res, inst) => ({ item: await fo.advance(inst, uuid(req), req.body) })));
+schoolRouter.post("/front-office/adm-applications/:id/advance", desk, h(async (req, _res, inst) => ({ item: await fo.advance(inst, uuid(req), req.body, req.user?.role) })));
 schoolRouter.post("/front-office/adm-applications/:id/admission-number", desk, h(async (req, _res, inst) => ({ item: await fo.generateAdmissionNumber(inst, uuid(req)) })));
 schoolRouter.post("/front-office/adm-applications/:id/allocate", desk, h(async (req, _res, inst) => ({ item: await fo.allocate(inst, uuid(req), req.body) })));
 schoolRouter.get("/front-office/admission/programmes", desk, h(async (_req, _res, inst) => ({ items: await adm2.programmes(inst) })));

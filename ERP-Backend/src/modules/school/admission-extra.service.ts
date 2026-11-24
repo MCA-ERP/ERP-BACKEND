@@ -62,16 +62,19 @@ export async function offers(inst: string) {
 }
 
 export async function meritList(inst: string, programme?: string) {
-  const [list, all, pct, off] = await Promise.all([programmes(inst), apps(inst), testPercent(inst), offers(inst) as Promise<{ application_id: string; status: string }[]>]);
+  const [list, all, pct, off, iv] = await Promise.all([programmes(inst), apps(inst), testPercent(inst), offers(inst) as Promise<{ application_id: string; status: string }[]>, supabaseAdmin.from("adm_interviews").select("application_id, score").eq("institution_id", inst).eq("status", "Completed").not("score", "is", null)]);
+  const interview = new Map<string, number>();
+  for (const x of check(iv) as { application_id: string; score: number }[]) interview.set(x.application_id, Math.max(interview.get(x.application_id) ?? 0, x.score));
+  const blend = (id: string) => { const t = pct.has(id) ? pct.get(id)! : null; const i = interview.has(id) ? interview.get(id)! : null; if (t !== null && i !== null) return Math.round((t * p.test_weight + i * p.interview_weight) / Math.max(1, p.test_weight + p.interview_weight)); return t !== null ? Math.round(t) : i;  };
   const p = list.find((x) => x.name === programme) ?? list[0];
   const offered = new Map(off.map((o) => [o.application_id, o.status]));
   const rows = all.filter((a) => programmeFor(list, a.class_sought, a.details?.stream)?.name === p.name && !["Returned", "Rejected"].includes(a.status))
-    .map((a) => ({ id: a.id, code: a.code, child: a.child, category: a.details?.category || "General", test: pct.has(a.id) ? Math.round(pct.get(a.id)!) : null, dob: a.details?.dob ?? "", status: a.status, offer: offered.get(a.id) ?? null }))
-    .sort((a, b) => (b.test ?? -1) - (a.test ?? -1) || (a.dob || "9999").localeCompare(b.dob || "9999"));
-  const scored = rows.filter((r) => r.test !== null);
-  const ranked = rows.map((r, i) => ({ ...r, rank: i + 1, score: r.test, state: r.offer ?? (r.test === null ? "Not assessed" : i < p.seats_on_merit ? "Eligible for offer" : "Waitlist") }));
+    .map((a) => ({ id: a.id, code: a.code, child: a.child, category: a.details?.category || "General", test: pct.has(a.id) ? Math.round(pct.get(a.id)!) : null, interview: interview.get(a.id) ?? null, score: blend(a.id), dob: a.details?.dob ?? "", status: a.status, offer: offered.get(a.id) ?? null }))
+    .sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || (a.dob || "9999").localeCompare(b.dob || "9999"));
+  const scored = rows.filter((r) => r.score !== null);
+  const ranked = rows.map((r, i) => ({ ...r, rank: i + 1, state: r.offer ?? (r.score === null ? "Not assessed" : i < p.seats_on_merit ? "Eligible for offer" : "Waitlist") }));
   const cut = scored[Math.min(p.seats_on_merit, scored.length) - 1];
-  return { programmes: list.map((x) => x.name), programme: p, rows: ranked, cutoff: cut?.test ?? null };
+  return { programmes: list.map((x) => x.name), programme: p, rows: ranked, cutoff: cut?.score ?? null };
 }
 
 export async function seatMatrix(inst: string) {
