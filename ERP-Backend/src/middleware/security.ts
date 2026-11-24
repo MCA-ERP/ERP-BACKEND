@@ -71,3 +71,8 @@ export const partnerLimiter = rateLimit({
 });
 /** Payment gateway webhooks. */
 export const webhookLimiter = limiter(60_000, 120, "Too many requests.");
+
+/** A family creating an Applicant account from the public sign-up page. */
+export const applicantSignupLimiter = limiter(60 * 60_000, 10, "Too many sign-ups from this address. Please try again later.");
+/** A signed-in family linking an application number to its account: the number and mobile are a guess surface, so keep it slow. */
+export const applicantLinkLimiter = limiter(15 * 60_000, 10, "Too many attempts. Please try again in a few minutes.");

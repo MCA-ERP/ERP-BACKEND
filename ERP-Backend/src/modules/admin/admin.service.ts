@@ -84,7 +84,7 @@ export async function createUser(input: {
   must_change_password?: boolean;
 }, actorRole?: string) {
   if (input.role === "SuperAdmin" && actorRole !== "SuperAdmin") throw new HttpError(403, "Only a Super Administrator can create another Super Administrator.");
-  if (input.institution_id && !["SuperAdmin", "Student", "Parent"].includes(input.role)) await assertRoomFor(input.institution_id, "staff");
+  if (input.institution_id && !["SuperAdmin", "Student", "Parent", "Applicant"].includes(input.role)) await assertRoomFor(input.institution_id, "staff");
   await checkPassword(input.password, [input.email, input.email.split("@")[0]]);
   const roleId = await roleIdByName(input.role);
   const email = input.email.toLowerCase();

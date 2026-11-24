@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "../../../db/client";
+import { scopeRule } from "../../lib/assist-scope";
 import { HttpError } from "../../lib/http-error";
 import type { AssistAction } from "../admin/assist-actions";
 import { runAgent } from "../admin/assist-agent";
@@ -65,6 +66,7 @@ export async function admissionsChat(messages: ChatMessage[], page: string | und
     "When someone asks to open or go to a page (in English, Hindi or Telugu), call portal_guide if you need the address, then open_page_link with go=true, and confirm in one short line. Do not say a page is open unless you called the tool. When someone asks how to find a page, answer in one line with the bold path (for example: Open **Leads & Follow-up → Lead Management**.), call open_page_link without go.",
     "Answer directly and briefly in plain language. Write **bold** around page names and menu paths, joined with arrows. Use short lines or simple lists; never markdown tables, pipes or headings, and never write HTML. Reply in the language the person wrote or spoke in (English, Hindi or Telugu); keep page names in English. Never show ids or UUIDs.",
     page ? `The person is currently on: ${page}` : "",
+  scopeRule("Admissions portal", "this school's enquiries, leads, applications, seats and how to use the portal", "fee ledgers or accounts books, staff salaries, student marks or attendance, the platform or other schools"),
   ].filter(Boolean).join("\n\n");
   try {
     const out = await runAgent({ provider: which, model: MODEL(), system, messages: messages.slice(-12), user: { permissions: [] }, tools: TOOLS as never, run: (n, i, ac) => runTool(inst, me, n, i, ac, guide) });
