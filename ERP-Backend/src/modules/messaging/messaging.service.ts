@@ -244,6 +244,29 @@ export function notifySchoolSafely(key: string, institutionId: string, vars: Rec
 }
 
 // ─────────────────────────────────────────────
+//  A school's own texts to families
+// ─────────────────────────────────────────────
+/** The text channels that can really send a template: its provider is set up and the template has the provider's id. */
+export async function schoolTextChannels(key: string): Promise<("sms" | "whatsapp")[]> {
+  return (await templatesFor(key)).filter((t): t is TemplateRow & { channel: "sms" | "whatsapp" } => t.channel !== "email" && !!t.provider_template_id && configured(t.channel)).map((t) => t.channel);
+}
+/** Queues one text per number on each chosen channel and returns how many were queued. */
+export async function sendSchoolText(input: { key: string; institutionId: string; channels: ("sms" | "whatsapp")[]; phones: string[]; variables: Record<string, string>; relatedId: string; createdBy: string }): Promise<number> {
+  const [templates, school] = await Promise.all([templatesFor(input.key), supabaseAdmin.from("institutions").select("name").eq("id", input.institutionId).maybeSingle()]);
+  const vars = { school_name: (school.data as { name: string } | null)?.name ?? "", ...input.variables };
+  const ids: string[] = [];
+  for (const t of templates) {
+    if (t.channel === "email" || !input.channels.includes(t.channel) || !t.provider_template_id || !configured(t.channel)) continue;
+    for (const to of input.phones) {
+      const id = await enqueue({ channel: t.channel, to, body: render(t.body, vars), payload: { template_id: t.provider_template_id, variables: vars, order: t.channel === "whatsapp" ? placeholderOrder(t.body) : undefined }, institutionId: input.institutionId, relatedType: "reminder", relatedId: input.relatedId, createdBy: input.createdBy });
+      if (id) ids.push(id);
+    }
+  }
+  deliverInBackground(ids);
+  return ids.length;
+}
+
+// ─────────────────────────────────────────────
 //  Announcements
 // ─────────────────────────────────────────────
 export async function sendAnnouncementMessages(
