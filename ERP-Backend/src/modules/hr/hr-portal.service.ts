@@ -4,7 +4,7 @@ import { check } from "../../lib/db";
 import { HttpError } from "../../lib/http-error";
 import { assertHrMayChange } from "../school/protected-staff";
 import { directory } from "../school/hr.service";
-import { candidates, flow, offers, openings } from "../school/hr2.service";
+import { candidates, flow, offers, openings, maskPan } from "../school/hr2.service";
 import { leaveApprovals } from "../school/hr3.service";
 import { compliance, exits, vacancies } from "../school/hr4.service";
 import { payStatus } from "../school/pay.service";
@@ -149,7 +149,7 @@ export async function employment(inst: string, profile: string) {
     joined_on: s.joined_on, employment_type: (check(pr) as unknown[]).length ? "On probation" : "",
     campus: one(c?.campuses ?? null)?.name ?? "",
     bank: x?.bank_account ? `${x.bank_name ?? "Bank"} ••${x.bank_account.slice(-4)}` : "",
-    pan: x?.pan ?? "", uan: x?.uan ?? "", esi: x?.esi_no ?? "",
+    pan: maskPan(x?.pan), uan: x?.uan ?? "", esi: x?.esi_no ?? "",
   };
 }
 

@@ -7,6 +7,7 @@ import { programmes, seatMatrix, createOffer } from "../school/admission-extra.s
 import { savePlan, studentPlan } from "../school/fees.service";
 import { createParentAccount, createStudentAccounts, type Credential } from "../admin/users-mgmt.service";
 import { whoAmI } from "../teacher/teacher.service";
+import { hideAadhaar } from "../../lib/identity";
 
 /**
  * The Admissions portal. It works on the same adm_* tables as the School Admin Admission module, so a family entered in
@@ -69,7 +70,7 @@ export async function load(inst: string) {
     classRules(inst),
   ]);
   const enquiries = check(e) as unknown as Enq[];
-  const apps = check(a) as unknown as App[];
+  const apps = (check(a) as unknown as App[]).map((x) => ({ ...x, details: hideAadhaar(x.details) }));
   const docs = new Map<string, string[]>();
   for (const x of check(d) as { application_id: string; status: string }[]) docs.set(x.application_id, [...(docs.get(x.application_id) ?? []), x.status]);
   const assessed = new Set((check(m) as { application_id: string }[]).map((x) => x.application_id));
