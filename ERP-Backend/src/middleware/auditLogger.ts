@@ -1,7 +1,8 @@
 import { Request, Response, NextFunction } from "express";
 import { supabaseAdmin } from "../../db/client";
 
-const SENSITIVE_KEYS = /pass(word)?|secret|token|api[_-]?key/i;
+// secrets by any name containing them; identity, bank and statutory numbers by their exact field name
+const SENSITIVE_KEYS = /pass(word)?|secret|token|api[_-]?key|^(pan|aadhaar|aadhaar_last4|bank_account|account_number|debit_account|ifsc|uan|esi_no)$/i;
 
 export function redact(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redact);
