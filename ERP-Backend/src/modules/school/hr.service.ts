@@ -2,11 +2,12 @@ import { z } from "zod";
 import { supabaseAdmin } from "../../../db/client";
 import { check } from "../../lib/db";
 import { HttpError } from "../../lib/http-error";
+import { isSeniorRole } from "./protected-staff";
 
 /** HR: the staff directory of one school. */
 const one = <T>(v: T | T[] | null | undefined): T | null => (Array.isArray(v) ? (v[0] ?? null) : (v ?? null));
 const today = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
-const SKIP = ["Parent", "Student", "SuperAdmin", "PlatformManager", "SupportAgent", "ContentEditor"];
+const SKIP = ["Parent", "Student", "Applicant", "SuperAdmin", "PlatformManager", "SupportAgent", "ContentEditor"];
 const TEACHING = ["Faculty", "ClassTeacher"];
 const DEPT: Record<string, string> = { Principal: "Administration", VicePrincipal: "Administration", InstitutionAdmin: "Administration", Registrar: "Administration", AdmissionsHead: "Administration", Receptionist: "Administration", FrontOfficeSecurity: "Administration", HR: "Administration", Accountant: "Accounts", Finance: "Accounts", TransportManager: "Transport", Librarian: "Library", SchoolNurse: "Health", Counsellor: "Counselling", MessManager: "Mess", StoreIncharge: "Stores", ExamCoordinator: "Examinations" };
 
@@ -27,7 +28,7 @@ export async function directory(inst: string) {
   const list = await profiles(inst); await ensure(inst, list);
   const rows = check(await supabaseAdmin.from("hr_staff").select("profile_id, emp_code, department, staff_type, mobile, joined_on").eq("institution_id", inst).limit(5000)) as { profile_id: string; emp_code: string; department: string; staff_type: string; mobile: string | null; joined_on: string | null }[];
   const H = new Map(rows.map((x) => [x.profile_id, x]));
-  const items = list.map((p) => { const h = H.get(p.id)!; return { id: p.id, emp_code: h.emp_code, name: `${p.first_name} ${p.last_name}`.trim(), email: p.email, department: h.department, designation: p.designation || one(p.roles)?.display_name || "", role: one(p.roles)?.display_name ?? "", type: h.staff_type, mobile: h.mobile ?? "", joined_on: h.joined_on, status: p.status === "Active" || p.status === "active" ? "Active" : p.status }; }).sort((a, b) => a.emp_code.localeCompare(b.emp_code, undefined, { numeric: true }));
+  const items = list.map((p) => { const h = H.get(p.id)!; return { id: p.id, emp_code: h.emp_code, name: `${p.first_name} ${p.last_name}`.trim(), email: p.email, department: h.department, designation: p.designation || one(p.roles)?.display_name || "", role: one(p.roles)?.display_name ?? "", senior: isSeniorRole(one(p.roles)?.name ?? ""), type: h.staff_type, mobile: h.mobile ?? "", joined_on: h.joined_on, status: p.status === "Active" || p.status === "active" ? "Active" : p.status }; }).sort((a, b) => a.emp_code.localeCompare(b.emp_code, undefined, { numeric: true }));
   const ms = today().slice(0, 7) + "-01";
   const att = check(await supabaseAdmin.from("staff_attendance").select("id", { count: "exact", head: true }).eq("institution_id", inst).gte("att_date", ms)) as unknown;
   void att;

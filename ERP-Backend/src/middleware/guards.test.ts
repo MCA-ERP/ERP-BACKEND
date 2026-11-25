@@ -37,6 +37,11 @@ describe("redact (audit log)", () => {
     const out = redact({ email: "a@b.c", password: "x", admin: { Password: "y", token: "t", name: "n" }, list: [{ api_key: "k", ok: 1 }] });
     expect(out).toEqual({ email: "a@b.c", password: "[REDACTED]", admin: { Password: "[REDACTED]", token: "[REDACTED]", name: "n" }, list: [{ api_key: "[REDACTED]", ok: 1 }] });
   });
+  it("hides identity, bank and statutory numbers, by exact field name only", () => {
+    const out = redact({ pan: "ABCDE1234F", rows: [{ aadhaar: "123412341234", bank_account: "1234567890", ifsc: "HDFC0001234", uan: "101233905521", esi_no: "1" }], account: "5001", panel: "HR", company: "x" });
+    const hidden = "[REDACTED]";
+    expect(out).toEqual({ pan: hidden, rows: [{ aadhaar: hidden, bank_account: hidden, ifsc: hidden, uan: hidden, esi_no: hidden }], account: "5001", panel: "HR", company: "x" });
+  });
 });
 
 describe("query helpers", () => {

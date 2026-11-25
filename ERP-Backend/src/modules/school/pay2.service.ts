@@ -42,12 +42,18 @@ export function breakdown(gross: number, basic: number, ded: { pf: number; esi: 
   const da = Math.round(basic * 0.12), hra = Math.round(basic * 0.24), conv = Math.min(1600, Math.max(0, gross - basic - da - hra)); const special = Math.max(0, gross - basic - da - hra - conv);
   return { earnings: [["Basic pay", basic], ["Dearness allowance", da], ["House rent allowance", hra], ["Transport allowance", conv], ["Special allowance", special]] as [string, number][], deductions: [["Provident fund", ded.pf], ["ESI", ded.esi], ["Professional tax", ded.pt], ["TDS / other", ded.other]] as [string, number][] };
 }
+/** One employee's current assignment and what it pays a month. The bank account shows its last four digits only. */
+export async function assignment(inst: string, id: string) {
+  const s = (await structures(inst)).items.find((x) => x.id === id); if (!s) throw new HttpError(404, "Staff member not found.");
+  const b = check(await supabaseAdmin.from("hr_staff").select("bank_name, bank_account").eq("profile_id", id).eq("institution_id", inst).maybeSingle()) as { bank_name: string | null; bank_account: string | null } | null;
+  return { staff_id: s.id, name: s.name, department: s.department, designation: s.designation, structure: s.effective_from ? s.structure : "", gross: s.gross, effective_from: s.effective_from, bank: b?.bank_account ? `${b.bank_name ?? "Bank"} ••${b.bank_account.slice(-4)}` : "", ...breakdown(s.gross, s.basic, s), total_deductions: s.deductions, net: s.net };
+}
 async function slips(inst: string, month: string) {
   const [r, st, hs] = await Promise.all([run(inst, month), structures(inst), supabaseAdmin.from("hr_staff").select("profile_id, bank_name, bank_account").eq("institution_id", inst).limit(5000)]);
   const B = new Map((check(hs) as { profile_id: string; bank_name: string | null; bank_account: string | null }[]).map((x) => [x.profile_id, x]));
   if (!r) return { run: null, items: [] as ReturnType<typeof mk>[] };
   const l = check(await supabaseAdmin.from("pay_run_lines").select("staff_id, working_days, present, paid_leave, lop, gross, deductions, net").eq("run_id", r.id)) as { staff_id: string; working_days: number; present: number; paid_leave: number; lop: number; gross: number; deductions: number; net: number }[];
-  const mk = (x: (typeof l)[number], s: (typeof st.items)[number]) => ({ staff_id: x.staff_id, name: s.name, emp_code: s.emp_code, designation: s.designation, department: s.department, days_paid: Number(x.present) + Number(x.paid_leave), gross: x.gross, net: x.net, lop_amount: x.deductions - (s.pf + s.esi + s.pt + s.other), bank: B.get(x.staff_id)?.bank_account ? `${B.get(x.staff_id)?.bank_name ?? ""} ••${(B.get(x.staff_id)?.bank_account ?? "").slice(-4)}` : "", ...breakdown(x.gross, s.basic, s) });
+  const mk = (x: (typeof l)[number], s: (typeof st.items)[number]) => ({ staff_id: x.staff_id, name: s.name, emp_code: s.emp_code, designation: s.designation, department: s.department, days_paid: Number(x.present) + Number(x.paid_leave), working_days: Number(x.working_days), gross: x.gross, net: x.net, lop_amount: x.deductions - (s.pf + s.esi + s.pt + s.other), bank: B.get(x.staff_id)?.bank_account ? `${B.get(x.staff_id)?.bank_name ?? ""} ••${(B.get(x.staff_id)?.bank_account ?? "").slice(-4)}` : "", ...breakdown(x.gross, s.basic, s) });
   const K = new Map(st.items.map((s) => [s.id, s]));
   return { run: r, items: l.filter((x) => K.has(x.staff_id)).map((x) => mk(x, K.get(x.staff_id)!)).sort((a, b) => a.emp_code.localeCompare(b.emp_code, undefined, { numeric: true })) };
 }
@@ -55,7 +61,7 @@ export async function payslips(inst: string, month: string) {
   monthRe.parse(month); const s = await slips(inst, month); const ready = !!s.run && ["Approved", "Paid"].includes(s.run.status);
   const paid = check(await supabaseAdmin.from("pay_payments").select("staff_id, status").eq("institution_id", inst).eq("month", month)) as { staff_id: string; status: string }[];
   const sc = check(await supabaseAdmin.from("institutions").select("name").eq("id", inst).maybeSingle()) as { name: string } | null;
-  return { month, school: sc?.name ?? "", status: s.run?.status ?? "Draft", ready, shared: !!s.run?.payslips_on, items: s.items.map((x) => ({ ...x, paid: paid.find((p) => p.staff_id === x.staff_id)?.status === "Paid" })) };
+  return { month, school: sc?.name ?? "", status: s.run?.status ?? "Draft", ready, shared: !!s.run?.payslips_on, shared_on: s.run?.payslips_on ?? null, paid_on: s.run?.paid_on ?? null, items: s.items.map((x) => ({ ...x, paid: paid.find((p) => p.staff_id === x.staff_id)?.status === "Paid" })) };
 }
 export async function sharePayslips(inst: string, input: unknown) {
   const { month } = z.object({ month: monthRe }).strict().parse(input);
@@ -118,7 +124,7 @@ async function base(inst: string, month: string) {
   const K = new Map(st.items.map((s) => [s.id, s]));
   return { run: r, set, rows: lines.filter((l) => K.has(l.staff_id)).map((l) => ({ ...l, s: K.get(l.staff_id)!, h: H.get(l.staff_id) })).sort((a, b) => a.s.emp_code.localeCompare(b.s.emp_code, undefined, { numeric: true })) };
 }
-const mon = (m: string) => new Date(`${m}-01T00:00:00Z`).toLocaleDateString("en-GB", { month: "short", year: "2-digit", timeZone: "UTC" }).toUpperCase().replace(" ", " ");
+const mon = (m: string) => new Date(`${m}-01T00:00:00Z`).toLocaleDateString("en-GB", { month: "short", year: "numeric", timeZone: "UTC" }).toUpperCase().replace(" ", " ");
 export async function bankFile(inst: string, month: string) {
   const b = await base(inst, month); const ok = b.rows.filter((x) => x.h?.bank_account && x.h?.ifsc); const missing = b.rows.length - ok.length;
   const text = ok.map((x, i) => `N,${String(i + 1).padStart(4, "0")},${b.set.debit_account},${x.net},${x.s.name.toUpperCase()},${x.h!.bank_account},${x.h!.ifsc},SALARY ${mon(month)} ${x.s.emp_code}`).join("\n");

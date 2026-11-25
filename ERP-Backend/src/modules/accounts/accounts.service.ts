@@ -300,7 +300,7 @@ export async function salaryBudget(inst: string) {
 
 export async function finalSettlements(inst: string) {
   const f = await hr4.fullAndFinal(inst);
-  return { items: f.items.map((x) => ({ id: x.id, name: x.name, designation: x.designation, years: x.years, last_day: x.last_day, lines: x.lines, net: x.net, status: x.status === "Ready for Finance" ? "Ready for Finance" : "Pending", waiting_for: x.status === "Ready for Finance" ? "" : "Waiting for HR" })) };
+  return { items: f.items.map((x) => ({ id: x.id, name: x.name, designation: x.designation, years: x.years, last_day: x.last_day, lines: x.lines, net: x.net, status: x.status, paid_on: x.paid_on, paid_ref: x.paid_ref, waiting_for: x.status === "Pending" ? "Waiting for HR" : "" })) };
 }
 
 // ═════════════ AI insights ═════════════

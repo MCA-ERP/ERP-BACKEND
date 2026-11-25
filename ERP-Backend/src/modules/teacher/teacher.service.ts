@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { inWindow, isFieldStaff, savedRules } from "../school/geo-fence.service";
 import { supabaseAdmin } from "../../../db/client";
 import { check } from "../../lib/db";
 import { HttpError } from "../../lib/http-error";
@@ -281,14 +282,17 @@ export async function checkin(inst: string, me: string, input: unknown) {
   }
   if (cur?.in_time) throw new HttpError(409, `You checked in at ${cur.in_time.slice(0, 5)}.`);
   if (i.lat === undefined || i.lng === undefined) throw new HttpError(400, "Allow your location so the school can see you are on campus.");
-  if (!i.selfie) throw new HttpError(400, "Take a quick selfie to check in.");
+  const rules = await savedRules(inst);
+  if ((rules?.selfie ?? true) && !i.selfie) throw new HttpError(400, "Take a quick selfie to check in.");
+  if (!inWindow(rules, hm(nowIso))) throw new HttpError(409, `Check-in from the app is open ${rules!.window}. Ask HR to mark your attendance.`);
   const campus = await myCampus(inst, me);
+  const field = rules?.field_anywhere ? isFieldStaff((check(await supabaseAdmin.from("user_profiles").select("designation").eq("id", me).eq("institution_id", inst).maybeSingle()) as { designation: string | null } | null)?.designation ?? "") : false;
   const located = !!campus && campus.latitude !== null && campus.longitude !== null;
   const distance = located ? haversine(Number(campus!.latitude), Number(campus!.longitude), i.lat, i.lng) : null;
   const inside = !located || (distance !== null && distance <= campus!.geofence_m + Math.min(50, i.accuracy_m ?? 0));
   const place = campus?.name ?? "School";
-  check(await supabaseAdmin.from("geo_checkins").insert({ institution_id: inst, staff_id: me, method: "Mobile app", place, distance_m: distance, geo_status: inside ? "Inside" : "Outside", selfie: "Matched" }).select("id"));
-  if (!inside) return { ok: false, outside: true, message: `You are about ${distance} m from ${place}. Your check-in has gone to the School Admin to review.` };
+  check(await supabaseAdmin.from("geo_checkins").insert({ institution_id: inst, staff_id: me, method: "Mobile app", place, distance_m: distance, geo_status: field ? "Field duty" : inside ? "Inside" : "Outside", selfie: "Matched" }).select("id"));
+  if (!inside && !field) return { ok: false, outside: true, message: `You are about ${distance} m from ${place}. Your check-in has gone to the School Admin to review.` };
   check(await supabaseAdmin.from("staff_attendance").upsert({ institution_id: inst, staff_id: me, att_date: today, status: "P", in_time: hm(nowIso), source: "Mobile app" }, { onConflict: "staff_id,att_date" }).select("id"));
   return { ok: true, message: `Checked in at ${hm(nowIso)}.` };
 }
