@@ -21,8 +21,13 @@ const name = (p: { first_name: string; last_name: string } | { first_name: strin
 
 // ═════════════ staff attendance ═════════════
 export async function staffList(inst: string) {
-  const rows = check(await supabaseAdmin.from("user_profiles").select("id, first_name, last_name, designation, roles:role_id(name, display_name)").eq("institution_id", inst).order("first_name").limit(1000)) as unknown as { id: string; first_name: string; last_name: string; designation: string | null; roles: { name: string; display_name: string } | { name: string; display_name: string }[] | null }[];
-  return rows.filter((r) => !["Parent", "Student"].includes(one(r.roles)?.name ?? "")).map((r) => ({ id: r.id, name: `${r.first_name} ${r.last_name}`.trim(), department: r.designation || one(r.roles)?.display_name || "Staff" }));
+  const [u, h] = await Promise.all([
+    supabaseAdmin.from("user_profiles").select("id, first_name, last_name, designation, roles:role_id(name, display_name)").eq("institution_id", inst).order("first_name").limit(1000),
+    supabaseAdmin.from("hr_staff").select("profile_id, emp_code, department").eq("institution_id", inst).limit(5000),
+  ]);
+  const rows = check(u) as unknown as { id: string; first_name: string; last_name: string; designation: string | null; roles: { name: string; display_name: string } | { name: string; display_name: string }[] | null }[];
+  const H = new Map(((check(h) ?? []) as { profile_id: string; emp_code: string; department: string }[]).map((x) => [x.profile_id, x]));
+  return rows.filter((r) => !["Parent", "Student", "Applicant"].includes(one(r.roles)?.name ?? "")).map((r) => ({ id: r.id, name: `${r.first_name} ${r.last_name}`.trim(), emp_code: H.get(r.id)?.emp_code ?? "", department: H.get(r.id)?.department || r.designation || one(r.roles)?.display_name || "Staff" }));
 }
 
 export async function staffSheet(inst: string, date: string) {
@@ -53,10 +58,12 @@ export async function staffDepartments(inst: string, date: string) {
 export async function listGeo(inst: string, date: string) {
   iso.parse(date);
   const { from, to } = dayRange(date);
-  const [rows, staff] = await Promise.all([supabaseAdmin.from("geo_checkins").select("id, staff_id, at, method, place, distance_m, geo_status, selfie, resolution, staff:staff_id(first_name, last_name)").eq("institution_id", inst).gte("at", from).lt("at", to).order("at", { ascending: false }), staffList(inst)]);
+  const [rows, staff, marked] = await Promise.all([supabaseAdmin.from("geo_checkins").select("id, staff_id, at, method, place, distance_m, geo_status, selfie, resolution, staff:staff_id(first_name, last_name)").eq("institution_id", inst).gte("at", from).lt("at", to).order("at", { ascending: false }), staffList(inst), supabaseAdmin.from("staff_attendance").select("staff_id").eq("institution_id", inst).eq("att_date", date).in("status", ["P", "L", "H"]).limit(5000)]);
+  const here = new Set([...(check(rows) as unknown as { staff_id: string }[]).map((r) => r.staff_id), ...((check(marked) ?? []) as { staff_id: string }[]).map((r) => r.staff_id)]);
+  const known = new Set(staff.map((x) => x.id));
   type R = { id: string; staff_id: string; at: string; method: string; place: string; distance_m: number | null; geo_status: string; selfie: string; resolution: string | null; staff: { first_name: string; last_name: string } | { first_name: string; last_name: string }[] | null };
   const items = (check(rows) as unknown as R[]).map((r) => ({ id: r.id, staff: name(r.staff), time: hm(r.at), method: r.method, place: r.place, distance_m: r.distance_m, geo_status: r.geo_status, selfie: r.selfie, resolution: r.resolution ?? "" }));
-  return { date, total_staff: staff.length, checked_in: new Set((check(rows) as unknown as R[]).map((r) => r.staff_id)).size, items };
+  return { date, total_staff: staff.length, checked_in: [...here].filter((id) => known.has(id)).length, items };
 }
 
 export async function addGeo(inst: string, input: unknown) {

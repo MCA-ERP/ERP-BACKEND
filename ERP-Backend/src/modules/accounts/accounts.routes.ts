@@ -5,6 +5,7 @@ import { requireRoles } from "../../middleware/rbacGuard";
 import { requireInstitutionId } from "../../lib/tenant";
 import { HttpError, sendError } from "../../lib/http-error";
 import * as a from "./accounts.service";
+import { paySettlement } from "../school/hr4.service";
 import * as cf from "./accounts-fees.service";
 import * as bl from "./accounts-billing.service";
 import * as bk from "./accounts-books.service";
@@ -12,6 +13,8 @@ import * as gl from "./accounts-gl.service";
 import * as rp from "./accounts-reports.service";
 import { accountsChat } from "./accounts-assist";
 import { transcribe as transcribeAudio } from "../admin/assist.service";
+import * as pay from "../school/pay.service";
+import * as pay2 from "../school/pay2.service";
 import * as t from "../teacher/teacher.service";
 import * as m from "../teacher/teacher-me.service";
 
@@ -107,6 +110,17 @@ accountsRouter.get("/hiring/posts", hrGate, h(({ inst }) => a.postApprovals(inst
 accountsRouter.post("/hiring/posts/:id", hrGate, h(({ inst, req }) => a.decidePost(inst, uuid(req), req.body, req.user?.role ?? "")));
 accountsRouter.get("/hiring/budget", hrGate, h(({ inst }) => a.salaryBudget(inst)));
 accountsRouter.get("/hiring/settlements", hrGate, h(({ inst }) => a.finalSettlements(inst)));
+accountsRouter.post("/hiring/settlements/:id/pay", hrGate, h(({ inst, req }) => paySettlement(inst, uuid(req), req.body, req.user?.role ?? "", req.user?.profileId)));
+
+// ── payroll: step 7 of the HR workflow. Finance approves what HR verified, then records the payments ──
+const actor = (req: Request) => `${req.user?.fullName ?? "Staff"} (${req.user?.roleDisplayName ?? req.user?.role ?? ""})`;
+accountsRouter.get("/pay/approval", hrGate, h(({ inst }) => pay2.approval(inst)));
+accountsRouter.post("/pay/approval", hrGate, h(({ inst, req }) => pay2.decideRun(inst, req.body, req.user?.role ?? "", actor(req))));
+accountsRouter.get("/pay/runs/:id", hrGate, h(({ inst, req }) => pay.runLines(inst, uuid(req))));
+accountsRouter.get("/pay/history", hrGate, h(({ inst }) => pay2.history(inst)));
+accountsRouter.get("/pay/payments", hrGate, h(({ inst, req }) => pay2.payments(inst, req.query.failed === "1")));
+accountsRouter.post("/pay/payments", hrGate, h(({ inst, req }) => pay2.recordPayments(inst, req.body, req.user?.role ?? "", actor(req))));
+accountsRouter.patch("/pay/payments/:id", hrGate, h(({ inst, req }) => pay2.updatePayment(inst, uuid(req), req.body)));
 
 // ── staff self-service shared with the Teacher portal (the same screens call these paths) ──
 accountsRouter.get("/help/categories", h(({ inst }) => t.helpCategories(inst)));

@@ -5,6 +5,7 @@ import { HttpError } from "../../lib/http-error";
 import { createUser } from "../admin/admin.service";
 import { generatePassword } from "../admin/users-mgmt.service";
 import { directory } from "./hr.service";
+import { HR_MAY_CREATE, mayCreate } from "./staff-roles";
 
 /** HR, part 2: the workflow strip, departments, designations, registration, profiles and recruitment. */
 const uid = z.string().uuid();
@@ -27,7 +28,7 @@ export async function departments(inst: string) {
   const [d, s, c, st] = await Promise.all([supabaseAdmin.from("hr_departments").select("id, name, head_id, campus_id, status, head:head_id(first_name, last_name), campus:campus_id(name)").eq("institution_id", inst).order("name"), supabaseAdmin.from("hr_staff").select("department").eq("institution_id", inst).limit(5000), supabaseAdmin.from("campuses").select("id, name").eq("institution_id", inst).order("name"), directory(inst)]);
   const S = check(s) as { department: string }[];
   type R = { id: string; name: string; head_id: string | null; campus_id: string | null; status: string; head: { first_name: string; last_name: string } | { first_name: string; last_name: string }[] | null; campus: { name: string } | { name: string }[] | null };
-  return { campuses: check(c) as { id: string; name: string }[], staff: st.items.map((x) => ({ id: x.id, name: x.name })), items: (check(d) as unknown as R[]).map((x) => { const h = one(x.head); return { id: x.id, name: x.name, head_id: x.head_id, head: h ? `${h.first_name} ${h.last_name}`.trim() : "", campus_id: x.campus_id, campus: one(x.campus)?.name ?? "Both", status: x.status, staff: S.filter((y) => y.department.toLowerCase() === x.name.toLowerCase()).length }; }) };
+  return { campuses: check(c) as { id: string; name: string }[], staff: st.items.map((x) => ({ id: x.id, name: x.name, department: x.department })), items: (check(d) as unknown as R[]).map((x) => { const h = one(x.head); return { id: x.id, name: x.name, head_id: x.head_id, head: h ? `${h.first_name} ${h.last_name}`.trim() : "", campus_id: x.campus_id, campus: one(x.campus)?.name ?? "Both", status: x.status, staff: S.filter((y) => y.department.toLowerCase() === x.name.toLowerCase()).length }; }) };
 }
 export async function addDepartment(inst: string, input: unknown) {
   const i = z.object({ name: z.string().trim().min(2, "Enter the department.").max(60), head_id: uid.nullable().optional(), campus_id: uid.nullable().optional() }).strict().parse(input);
@@ -52,7 +53,7 @@ export async function departmentsFromStaff(inst: string) {
 export async function designations(inst: string) {
   const [d, p] = await Promise.all([supabaseAdmin.from("hr_designations").select("id, name, level, pay_band, status").eq("institution_id", inst).order("level").order("name"), supabaseAdmin.from("user_profiles").select("designation").eq("institution_id", inst).limit(5000)]);
   const P = check(p) as { designation: string | null }[];
-  return { items: (check(d) as { id: string; name: string; level: string; pay_band: string; status: string }[]).map((x) => ({ ...x, staff: P.filter((y) => (y.designation ?? "").toLowerCase() === x.name.toLowerCase()).length })) };
+  return { held: P.map((y) => y.designation ?? "").filter(Boolean), items: (check(d) as { id: string; name: string; level: string; pay_band: string; status: string }[]).map((x) => ({ ...x, staff: P.filter((y) => (y.designation ?? "").toLowerCase() === x.name.toLowerCase()).length })) };
 }
 export async function addDesignation(inst: string, input: unknown) {
   const i = z.object({ name: z.string().trim().min(2, "Enter the designation.").max(100), level: z.enum(["L1", "L2", "L3", "L4", "L5", "L6"]), pay_band: z.string().trim().max(40).optional() }).strict().parse(input);
@@ -75,7 +76,7 @@ export async function designationsFromStaff(inst: string) {
 
 // ═════════════ registration ═════════════
 const ROLES = ["Faculty", "ClassTeacher", "Accountant", "Librarian", "Receptionist", "SchoolNurse", "Counsellor", "TransportManager", "MessManager", "StoreIncharge", "ExamCoordinator", "HR", "Registrar", "AdmissionsHead", "FrontOfficeSecurity", "Principal"] as const;
-const roleFor = (type: string, designation: string) => (/^(principal|head ?master|head ?mistress)\b/i.test(designation.trim()) ? "Principal" : type === "Teaching" ? "Faculty" : /accountant/i.test(designation) ? "Accountant" : /librarian/i.test(designation) ? "Librarian" : /nurse/i.test(designation) ? "SchoolNurse" : /counsel/i.test(designation) ? "Counsellor" : /admission/i.test(designation) ? "AdmissionsHead" : /registrar/i.test(designation) ? "Registrar" : "Receptionist");
+const roleFor = (type: string, designation: string) => (/^(principal|head ?master|head ?mistress)\b/i.test(designation.trim()) ? "Principal" : /^(hr\b|human resource)/i.test(designation.trim()) ? "HR" : type === "Teaching" ? "Faculty" : /accountant/i.test(designation) ? "Accountant" : /librarian/i.test(designation) ? "Librarian" : /nurse/i.test(designation) ? "SchoolNurse" : /counsel/i.test(designation) ? "Counsellor" : /admission/i.test(designation) ? "AdmissionsHead" : /registrar/i.test(designation) ? "Registrar" : "Receptionist");
 const typeFor = (designation: string) => (/teacher|pgt|tgt|prt|faculty|lecturer|professor/i.test(designation) ? "Teaching" : "Non-teaching");
 const empInput = z.object({ name: z.string().trim().min(2, "Enter the name.").max(120), email: z.string().trim().toLowerCase().email("Enter a valid email."), mobile: z.string().trim().max(30).optional(), department: z.string().trim().max(60).optional(), designation: z.string().trim().max(100).optional(), staff_type: z.enum(["Teaching", "Non-teaching"]), role: z.string().trim().min(2).max(50).optional(), joined_on: date.nullable().optional(), gender: z.enum(["Male", "Female", "Other"]).nullable().optional(), date_of_birth: date.nullable().optional(), monthly_salary: z.number().int().min(0).max(10_000_000).nullable().optional(), qualification: z.string().trim().max(120).optional(), pan: z.string().trim().toUpperCase().regex(/^([A-Z]{5}[0-9]{4}[A-Z])?$/, "PAN looks like ABCDE1234F.").optional(), emp_code: z.string().trim().max(20).optional() }).strict();
 /** Roles added for this school (or by the platform team) that staff can be given a login with. */
@@ -83,8 +84,23 @@ async function customRoleNames(inst: string) {
   const r = check(await supabaseAdmin.from("roles").select("name, is_system_default, institution_id").eq("scope", "school")) as { name: string; is_system_default: boolean; institution_id: string | null }[];
   return r.filter((x) => !x.is_system_default && (x.institution_id === null || x.institution_id === inst)).map((x) => x.name);
 }
+/** The staff roles that belong to this school: school scope only, never a platform role. */
+async function schoolRoleNames(inst: string) {
+  const r = check(await supabaseAdmin.from("roles").select("name, institution_id").eq("scope", "school")) as { name: string; institution_id: string | null }[];
+  return r.filter((x) => x.institution_id === null || x.institution_id === inst).map((x) => x.name);
+}
+export { HR_MAY_CREATE };
+/** The roles the signed-in person may pick when registering staff. */
+export async function creatableRoles(inst: string, actorRole: string, roles: string[]) {
+  const own = await schoolRoleNames(inst);
+  return roles.filter((r) => mayCreate(actorRole, r, own));
+}
+function assertMayCreate(actorRole: string, role: string, own: string[]) {
+  if (!mayCreate(actorRole, role, own)) throw new HttpError(403, `Ask the School Admin to create this login (role: ${role}).`);
+}
 async function makeEmployee(inst: string, i: z.infer<typeof empInput>, actorRole: string) {
   const [first, ...rest] = i.name.split(/\s+/); const role = i.role ?? roleFor(i.staff_type, i.designation ?? "");
+  assertMayCreate(actorRole, role, await schoolRoleNames(inst));
   const password = generatePassword();
   const u = (await createUser({ email: i.email, password, first_name: first, last_name: rest.join(" ") || "-", phone: i.mobile, role, institution_id: inst, must_change_password: true }, actorRole)) as unknown as { id: string };
   check(await supabaseAdmin.from("user_profiles").update({ designation: i.designation || null }).eq("id", u.id).eq("institution_id", inst).select("id"));
@@ -102,6 +118,7 @@ export async function bulkImport(inst: string, input: unknown, actorRole: string
   const { rows, dry } = z.object({ dry: z.boolean(), rows: z.array(z.object({ name: z.string().max(120), emp_code: z.string().max(20).optional(), designation: z.string().max(100).optional(), department: z.string().max(60).optional(), joined_on: z.string().max(10).optional(), mobile: z.string().max(30).optional(), email: z.string().max(200) }).strict()).min(1, "The file has no rows.").max(500) }).strict().parse(input);
   const [em, co] = await Promise.all([supabaseAdmin.from("user_profiles").select("email").limit(100000), supabaseAdmin.from("hr_staff").select("emp_code").eq("institution_id", inst)]);
   const emails = new Set((check(em) as { email: string }[]).map((x) => x.email.toLowerCase())); const codes = new Set((check(co) as { emp_code: string }[]).map((x) => x.emp_code));
+  const own = await schoolRoleNames(inst);
   const out: { row: number; name: string; ok: boolean; error?: string; emp_code?: string; email?: string; temporary_password?: string }[] = [];
   for (const [n, r] of rows.entries()) {
     const parsed = empInput.safeParse({ name: r.name, email: r.email, mobile: r.mobile || undefined, department: r.department || undefined, designation: r.designation || undefined, staff_type: typeFor(r.designation ?? ""), joined_on: r.joined_on || null, emp_code: r.emp_code || undefined });
@@ -111,6 +128,8 @@ export async function bulkImport(inst: string, input: unknown, actorRole: string
     if (emails.has(i.email)) { fail("That email already has an account."); continue; }
     if (i.emp_code && codes.has(i.emp_code)) { fail("That employee ID is used."); continue; }
     emails.add(i.email); if (i.emp_code) codes.add(i.emp_code);
+    const role = roleFor(i.staff_type, i.designation ?? "");
+    if (!mayCreate(actorRole, role, own)) { fail(`Ask the School Admin to create this login (role: ${role}).`); continue; }
     if (dry) { out.push({ row: n + 2, name: i.name, ok: true, emp_code: i.emp_code, email: i.email }); continue; }
     try { const c = await makeEmployee(inst, i, actorRole); out.push({ row: n + 2, name: c.name, ok: true, emp_code: c.emp_code, email: c.email, temporary_password: c.temporary_password }); } catch (e) { fail(e instanceof Error ? e.message : "Could not create the account."); }
   }
@@ -127,11 +146,13 @@ async function own(inst: string, id: string) {
   if (!p) throw new HttpError(404, "Staff member not found.");
   return p;
 }
+/** "+91 98490 12300" is shown as "+91 98••• ••300"-style: the first four and last two digits of a phone number inside the text. */
+export const maskPhone = (text: string) => text.replace(/\+?\d[\d\s-]{6,}\d/g, (n) => { const total = n.replace(/\D/g, "").length; let seen = 0; return n.replace(/\d/g, (c) => { seen++; return seen <= 4 || seen > total - 2 ? c : "•"; }); });
 export async function profile(inst: string, id: string) {
   const p = await own(inst, id); await directory(inst);
   const h = check(await supabaseAdmin.from("hr_staff").select("emp_code, department, staff_type, mobile, joined_on, gender, date_of_birth, blood_group, marital_status, pan, aadhaar_last4, address, emergency_contact, monthly_salary, qualification").eq("profile_id", id).maybeSingle()) as Record<string, string | number | null> | null;
   const [q, x] = await Promise.all([supabaseAdmin.from("hr_qualifications").select("id, title, place, year, result").eq("profile_id", id).order("year"), supabaseAdmin.from("hr_experience").select("id, organisation, role, from_on, to_on").eq("profile_id", id).order("from_on", { ascending: false })]);
-  return { id, name: `${p.first_name} ${p.last_name}`.trim(), email: p.email, designation: p.designation ?? "", status: p.status.toLowerCase() === "active" ? "Active" : p.status, ...(h ?? {}), aadhaar: h?.aadhaar_last4 ? `XXXX XXXX ${h.aadhaar_last4}` : "", qualifications: check(q) as { id: string; title: string; place: string; year: number | null; result: string }[], experience: check(x) as { id: string; organisation: string; role: string; from_on: string; to_on: string | null }[] };
+  return { id, name: `${p.first_name} ${p.last_name}`.trim(), email: p.email, designation: p.designation ?? "", status: p.status.toLowerCase() === "active" ? "Active" : p.status, ...(h ?? {}), emergency_contact: maskPhone(String(h?.emergency_contact ?? "")), aadhaar: h?.aadhaar_last4 ? `XXXX XXXX ${h.aadhaar_last4}` : "", qualifications: check(q) as { id: string; title: string; place: string; year: number | null; result: string }[], experience: check(x) as { id: string; organisation: string; role: string; from_on: string; to_on: string | null }[] };
 }
 export async function saveProfile(inst: string, id: string, input: unknown) {
   const i = z.object({ name: z.string().trim().min(2).max(120).optional(), gender: z.enum(["Male", "Female", "Other"]).nullable().optional(), date_of_birth: date.nullable().optional(), blood_group: z.enum(["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]).nullable().optional(), marital_status: z.enum(["Single", "Married", "Other"]).nullable().optional(), pan: z.string().trim().toUpperCase().regex(/^([A-Z]{5}[0-9]{4}[A-Z])?$/, "PAN looks like ABCDE1234F.").optional(), aadhaar: z.string().trim().max(20).optional(), mobile: z.string().trim().max(30).optional(), address: z.string().trim().max(300).optional(), emergency_contact: z.string().trim().max(160).optional() }).strict().parse(input);
@@ -141,7 +162,7 @@ export async function saveProfile(inst: string, id: string, input: unknown) {
   if (i.aadhaar !== undefined && digits && digits.length !== 12) throw new HttpError(400, "Aadhaar has 12 digits.");
   const row: Record<string, unknown> = {};
   for (const k of ["gender", "date_of_birth", "blood_group", "marital_status"] as const) if (i[k] !== undefined) row[k] = i[k];
-  if (i.pan !== undefined) row.pan = i.pan || null; if (i.mobile !== undefined) row.mobile = i.mobile || null; if (i.address !== undefined) row.address = i.address || null; if (i.emergency_contact !== undefined) row.emergency_contact = i.emergency_contact || null;
+  if (i.pan !== undefined) row.pan = i.pan || null; if (i.mobile !== undefined) row.mobile = i.mobile || null; if (i.address !== undefined) row.address = i.address || null; if (i.emergency_contact !== undefined && !i.emergency_contact.includes("•")) row.emergency_contact = i.emergency_contact || null; // a masked number sent back is left as it was
   if (i.aadhaar !== undefined) row.aadhaar_last4 = digits ? digits.slice(-4) : null;
   if (Object.keys(row).length) check(await supabaseAdmin.from("hr_staff").update(row).eq("profile_id", id).eq("institution_id", inst).select("profile_id"));
   return { ok: true };
@@ -163,36 +184,70 @@ export async function removeRecord(inst: string, kind: "qualification" | "experi
 }
 
 // ═════════════ recruitment ═════════════
+export const CHANNELS = ["School website", "Naukri", "LinkedIn", "Indeed", "WhatsApp"] as const;
+const NEEDS_119 = "This needs a database update (migration 119) that has not been applied yet.";
+/** Columns added by migration 119; null until it has been applied, so the older screens keep working. */
+async function openingExtra(inst: string) {
+  const r = await supabaseAdmin.from("hr_openings").select("id, channels, description, needs_tet").eq("institution_id", inst);
+  return r.error ? null : new Map((r.data as { id: string; channels: string[]; description: string; needs_tet: boolean }[]).map((x) => [x.id, x]));
+}
 export async function openings(inst: string) {
+  const [extra, sc, cp] = await Promise.all([openingExtra(inst), supabaseAdmin.from("institutions").select("name").eq("id", inst).maybeSingle(), supabaseAdmin.from("campuses").select("id", { count: "exact", head: true }).eq("institution_id", inst)]);
   const [o, c] = await Promise.all([supabaseAdmin.from("hr_openings").select("id, position, department, posted_on, closes_on, status, req_qualification, needs_bed, min_experience, budget_annual").eq("institution_id", inst).order("posted_on", { ascending: false }), supabaseAdmin.from("hr_candidates").select("opening_id").eq("institution_id", inst).limit(20000)]);
   const C = check(c) as { opening_id: string | null }[];
-  return { items: (check(o) as { id: string; position: string; department: string; posted_on: string; closes_on: string | null; status: string; req_qualification: string; needs_bed: boolean; min_experience: number; budget_annual: number }[]).map((x) => ({ ...x, applications: C.filter((y) => y.opening_id === x.id).length })) };
+  return { ready: !!extra, school: (sc.data as { name: string } | null)?.name ?? "", campuses: cp.count ?? 0, items: (check(o) as { id: string; position: string; department: string; posted_on: string; closes_on: string | null; status: string; req_qualification: string; needs_bed: boolean; min_experience: number; budget_annual: number }[]).map((x) => ({ ...x, channels: extra?.get(x.id)?.channels ?? [], description: extra?.get(x.id)?.description ?? "", needs_tet: extra?.get(x.id)?.needs_tet ?? false, applications: C.filter((y) => y.opening_id === x.id).length })) };
+}
+/** Records that HR has advertised an opening on a channel. Nothing is sent to the portal itself. */
+export async function postChannel(inst: string, id: string, input: unknown) {
+  const { channel } = z.object({ channel: z.enum(CHANNELS) }).strict().parse(input);
+  const extra = await openingExtra(inst); if (!extra) throw new HttpError(409, NEEDS_119);
+  const o = check(await supabaseAdmin.from("hr_openings").select("id, status").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; status: string } | null;
+  if (!o) throw new HttpError(404, "Opening not found."); if (o.status === "Closed") throw new HttpError(409, "That opening is closed.");
+  const channels = [...new Set([...(extra.get(id)?.channels ?? []), channel])];
+  check(await supabaseAdmin.from("hr_openings").update({ channels }).eq("id", id).eq("institution_id", inst).select("id"));
+  return { channels };
+}
+/** Screening rules for each post. HR cannot raise or remove a post's approved salary limit. */
+export async function setRules(inst: string, input: unknown, role: string) {
+  const { items } = z.object({ items: z.array(z.object({ id: uid, req_qualification: z.string().trim().max(120), needs_bed: z.boolean(), needs_tet: z.boolean(), min_experience: z.number().int().min(0).max(40), budget_annual: z.number().int().min(0).max(100_000_000) }).strict()).min(1).max(200) }).strict().parse(input);
+  const have = new Map((check(await supabaseAdmin.from("hr_openings").select("id, position, budget_annual").eq("institution_id", inst)) as { id: string; position: string; budget_annual: number }[]).map((x) => [x.id, x]));
+  const extra = await openingExtra(inst);
+  for (const i of items) {
+    const o = have.get(i.id); if (!o) throw new HttpError(404, "Opening not found.");
+    if (!["Principal", "InstitutionAdmin"].includes(role) && o.budget_annual > 0 && (i.budget_annual === 0 || i.budget_annual > o.budget_annual)) throw new HttpError(403, `The salary limit for ${o.position} is ${inr(o.budget_annual)}. Only the Principal can raise it.`);
+    if (i.needs_tet && !extra) throw new HttpError(409, NEEDS_119);
+  }
+  for (const { id, needs_tet, ...row } of items) check(await supabaseAdmin.from("hr_openings").update(extra ? { ...row, needs_tet } : row).eq("id", id).eq("institution_id", inst).select("id"));
+  return { saved: items.length };
 }
 export async function addOpening(inst: string, input: unknown) {
   const i = z.object({ position: z.string().trim().min(2, "Enter the position.").max(100), department: z.string().trim().max(60).optional(), closes_on: date.nullable().optional(), req_qualification: z.string().trim().max(120).optional(), needs_bed: z.boolean().optional(), min_experience: z.number().int().min(0).max(40).optional(), budget_annual: z.number().int().min(0).max(100_000_000).optional() }).strict().parse(input);
   return check(await supabaseAdmin.from("hr_openings").insert({ institution_id: inst, position: i.position, department: i.department ?? "", closes_on: i.closes_on ?? null, req_qualification: i.req_qualification ?? "", needs_bed: i.needs_bed ?? false, min_experience: i.min_experience ?? 0, budget_annual: i.budget_annual ?? 0 }).select("id").single());
 }
 export async function setOpening(inst: string, id: string, input: unknown) {
-  const { status } = z.object({ status: z.enum(["Open", "Interviewing", "Closed"]) }).strict().parse(input);
-  const r = check(await supabaseAdmin.from("hr_openings").update({ status }).eq("id", id).eq("institution_id", inst).select("id")) as unknown[];
+  const i = z.object({ status: z.enum(["Open", "Interviewing", "Closed"]).optional(), description: z.string().trim().max(300).optional() }).strict().refine((v) => v.status !== undefined || v.description !== undefined, "Nothing to change.").parse(input);
+  if (i.description !== undefined && !(await openingExtra(inst))) throw new HttpError(409, NEEDS_119);
+  const r = check(await supabaseAdmin.from("hr_openings").update(i).eq("id", id).eq("institution_id", inst).select("id")) as unknown[];
   if (!r.length) throw new HttpError(404, "Not found."); return { ok: true };
 }
 interface Cand { id: string; app_code: string; cv_code: string; opening_id: string | null; name: string; current_org: string; city: string; qualification: string; experience: number; expected_annual: number; source: string; stage: string; demo_score: number | null; applied_on: string; op: { position: string; req_qualification: string; needs_bed: boolean; min_experience: number; budget_annual: number } | { position: string; req_qualification: string; needs_bed: boolean; min_experience: number; budget_annual: number }[] | null }
 const CAND = "id, app_code, cv_code, opening_id, name, current_org, city, qualification, experience, expected_annual, source, stage, demo_score, applied_on, op:opening_id(position, req_qualification, needs_bed, min_experience, budget_annual)";
-function rules(c: Cand) {
+function rules(c: Cand, tet = false) {
   const o = one(c.op); if (!o) return [];
   const out: { label: string; ok: boolean }[] = []; const q = c.qualification.toLowerCase();
   if (o.req_qualification) out.push({ label: "Qualification", ok: o.req_qualification.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean).some((k) => q.includes(k)) });
   if (o.needs_bed) out.push({ label: "B.Ed", ok: /b\.?\s?ed/i.test(c.qualification) });
+  if (tet) out.push({ label: "CTET / TET", ok: /\b[a-z]{0,3}tet\b/i.test(c.qualification) });
   if (o.min_experience > 0) out.push({ label: `Experience ${o.min_experience}+ yrs`, ok: c.experience >= o.min_experience });
   if (o.budget_annual > 0) out.push({ label: "Within budget", ok: c.expected_annual <= o.budget_annual });
   return out;
 }
-const shape = (c: Cand) => { const r = rules(c); return { id: c.id, app_code: c.app_code, cv_code: c.cv_code, opening_id: c.opening_id, position: one(c.op)?.position ?? "", name: c.name, current_org: c.current_org, city: c.city, qualification: c.qualification, experience: c.experience, expected_annual: c.expected_annual, source: c.source, stage: c.stage, demo_score: c.demo_score, applied_on: c.applied_on, rules: r, rule_pct: r.length ? Math.round((r.filter((x) => x.ok).length / r.length) * 100) : 100 }; };
+const shape = (c: Cand, tet = false) => { const r = rules(c, tet); return { id: c.id, app_code: c.app_code, cv_code: c.cv_code, opening_id: c.opening_id, position: one(c.op)?.position ?? "", name: c.name, current_org: c.current_org, city: c.city, qualification: c.qualification, experience: c.experience, expected_annual: c.expected_annual, source: c.source, stage: c.stage, demo_score: c.demo_score, applied_on: c.applied_on, rules: r, rule_pct: r.length ? Math.round((r.filter((x) => x.ok).length / r.length) * 100) : 100 }; };
 export async function candidates(inst: string) {
   const [c, i] = await Promise.all([supabaseAdmin.from("hr_candidates").select(CAND).eq("institution_id", inst).order("applied_on", { ascending: false }).order("app_code", { ascending: false }).limit(5000), supabaseAdmin.from("hr_interviews").select("candidate_id, score, status").eq("institution_id", inst).eq("status", "Completed")]);
   const I = check(i) as { candidate_id: string; score: number | null }[];
-  return { items: (check(c) as unknown as Cand[]).map((x) => ({ ...shape(x), interview_score: I.find((y) => y.candidate_id === x.id)?.score ?? null })) };
+  const extra = await openingExtra(inst);
+  return { items: (check(c) as unknown as Cand[]).map((x) => ({ ...shape(x, extra?.get(x.opening_id ?? "")?.needs_tet), interview_score: I.find((y) => y.candidate_id === x.id)?.score ?? null })) };
 }
 export async function addCandidate(inst: string, input: unknown) {
   const i = z.object({ name: z.string().trim().min(2, "Enter the name.").max(120), opening_id: uid.nullable().optional(), current_org: z.string().trim().max(120).optional(), city: z.string().trim().max(60).optional(), qualification: z.string().trim().max(120).optional(), experience: z.number().int().min(0).max(50).optional(), expected_annual: z.number().int().min(0).max(100_000_000).optional(), source: z.enum(["Careers page", "Naukri", "LinkedIn", "Referral", "Walk-in", "Other"]).optional(), applied_on: date.optional() }).strict().parse(input);
@@ -242,21 +297,30 @@ export async function finishInterview(inst: string, id: string, input: unknown) 
   return { ok: true };
 }
 const CHECKS = ["employer", "refs", "police", "certificates", "id_address"] as const;
+/** Open discrepancy notes by candidate; null until migration 119 has been applied. */
+export async function discrepancies(inst: string) {
+  const r = await supabaseAdmin.from("hr_checks").select("candidate_id, discrepancy").eq("institution_id", inst);
+  return r.error ? null : new Map((r.data as { candidate_id: string; discrepancy: string }[]).map((x) => [x.candidate_id, x.discrepancy]));
+}
 export async function backgroundChecks(inst: string) {
   const [r, c] = await Promise.all([supabaseAdmin.from("hr_checks").select("candidate_id, employer, refs, police, certificates, id_address").eq("institution_id", inst), candidates(inst)]);
   const K = new Map(c.items.map((x) => [x.id, x]));
-  return { items: (check(r) as { candidate_id: string; employer: boolean; refs: boolean; police: boolean; certificates: boolean; id_address: boolean }[]).map((x) => ({ ...x, name: K.get(x.candidate_id)?.name ?? "", position: K.get(x.candidate_id)?.position ?? "", overall: CHECKS.every((k) => x[k]) ? "Verified" : "In progress" })) };
+  const notes = await discrepancies(inst);
+  return { ready: !!notes, items: (check(r) as { candidate_id: string; employer: boolean; refs: boolean; police: boolean; certificates: boolean; id_address: boolean }[]).map((x) => { const note = notes?.get(x.candidate_id) ?? ""; return { ...x, name: K.get(x.candidate_id)?.name ?? "", position: K.get(x.candidate_id)?.position ?? "", discrepancy: note, overall: note ? "Discrepancy" : CHECKS.every((k) => x[k]) ? "Verified" : "In progress" }; }) };
 }
 export async function verifyCheck(inst: string, id: string, input: unknown) {
-  const { item } = z.object({ item: z.enum(CHECKS) }).strict().parse(input);
-  const r = check(await supabaseAdmin.from("hr_checks").update({ [item]: true }).eq("candidate_id", id).eq("institution_id", inst).select("candidate_id")) as unknown[];
+  const i = z.union([z.object({ item: z.enum(CHECKS) }).strict(), z.object({ discrepancy: z.string().trim().max(300) }).strict()]).parse(input);
+  if ("discrepancy" in i && !(await discrepancies(inst))) throw new HttpError(409, NEEDS_119);
+  const r = check(await supabaseAdmin.from("hr_checks").update("item" in i ? { [i.item]: true } : { discrepancy: i.discrepancy }).eq("candidate_id", id).eq("institution_id", inst).select("candidate_id")) as unknown[];
   if (!r.length) throw new HttpError(404, "Not found."); return { ok: true };
 }
 export const split = (annual: number) => { const m = Math.round(annual / 12); const basic = Math.round(m / 2); const hra = Math.round(basic * 0.4); const pf = Math.min(Math.round(basic * 0.12), 1800); return { basic, hra, special: m - basic - hra - pf, pf }; };
 export async function offers(inst: string) {
   const [r, c, s] = await Promise.all([supabaseAdmin.from("hr_offers").select("id, code, candidate_id, annual_cost, joining_on, probation, valid_days, sent_on, status").eq("institution_id", inst).order("sent_on", { ascending: false }).order("code", { ascending: false }), candidates(inst), supabaseAdmin.from("institutions").select("name, address").eq("id", inst).maybeSingle()]);
   const K = new Map(c.items.map((x) => [x.id, x])); const sc = s.data as { name: string; address: string | null } | null;
-  return { school: sc?.name ?? "", address: sc?.address ?? "", selected: c.items.filter((x) => x.stage === "Selected").map((x) => ({ id: x.id, name: x.name, position: x.position, expected: x.expected_annual })), items: (check(r) as { id: string; code: string; candidate_id: string; annual_cost: number; joining_on: string; probation: number; valid_days: number; sent_on: string; status: string }[]).map((x) => ({ ...x, candidate: K.get(x.candidate_id)?.name ?? "", position: K.get(x.candidate_id)?.position ?? "", split: split(x.annual_cost) })) };
+  const [why, staff] = await Promise.all([supabaseAdmin.from("hr_offers").select("id, decline_reason").eq("institution_id", inst), directory(inst)]);
+  const reason = new Map(((why.data ?? []) as { id: string; decline_reason: string }[]).map((x) => [x.id, x.decline_reason]));
+  return { school: sc?.name ?? "", address: sc?.address ?? "", principal: staff.items.find((x) => x.designation === "Principal")?.name ?? "", selected: c.items.filter((x) => x.stage === "Selected").map((x) => ({ id: x.id, name: x.name, position: x.position, expected: x.expected_annual })), items: (check(r) as { id: string; code: string; candidate_id: string; annual_cost: number; joining_on: string; probation: number; valid_days: number; sent_on: string; status: string }[]).map((x) => ({ ...x, candidate: K.get(x.candidate_id)?.name ?? "", position: K.get(x.candidate_id)?.position ?? "", reason: reason.get(x.id) ?? "", split: split(x.annual_cost) })) };
 }
 export async function createOffer(inst: string, input: unknown, role: string, actor?: string) {
   const i = z.object({ candidate_id: uid, annual_cost: z.number().int().min(1).max(100_000_000), joining_on: date, probation: z.number().int().min(0).max(24), valid_days: z.number().int().min(1).max(60) }).strict().parse(input);
@@ -272,10 +336,14 @@ export async function createOffer(inst: string, input: unknown, role: string, ac
   return r;
 }
 export async function answerOffer(inst: string, id: string, input: unknown) {
-  const { status } = z.object({ status: z.enum(["Accepted", "Declined"]) }).strict().parse(input);
+  const { status, reason } = z.object({ status: z.enum(["Accepted", "Declined", "Withdrawn"]), reason: z.string().trim().max(160).optional() }).strict().parse(input);
   const o = check(await supabaseAdmin.from("hr_offers").select("id, status, candidate_id").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; status: string; candidate_id: string } | null;
   if (!o) throw new HttpError(404, "Not found."); if (o.status !== "Sent") throw new HttpError(409, "That offer already has an answer.");
-  check(await supabaseAdmin.from("hr_offers").update({ status }).eq("id", id).eq("institution_id", inst).select("id"));
-  check(await supabaseAdmin.from("hr_candidates").update({ stage: status === "Accepted" ? "Accepted" : "On hold" }).eq("id", o.candidate_id).eq("institution_id", inst).select("id"));
+  const u = await supabaseAdmin.from("hr_offers").update({ status }).eq("id", id).eq("institution_id", inst).eq("status", "Sent").select("id");
+  if (u.error?.code === "23514") throw new HttpError(409, NEEDS_119); // the old status list has no "Withdrawn"
+  if (!(check(u) as unknown[]).length) throw new HttpError(409, "That offer already has an answer.");
+  // the reason is only kept once migration 119 has added its column, so a failure here is ignored
+  if (reason && status === "Declined") await supabaseAdmin.from("hr_offers").update({ decline_reason: reason }).eq("id", id).eq("institution_id", inst);
+  check(await supabaseAdmin.from("hr_candidates").update({ stage: status === "Accepted" ? "Accepted" : status === "Declined" ? "On hold" : "Selected" }).eq("id", o.candidate_id).eq("institution_id", inst).select("id"));
   return { ok: true };
 }

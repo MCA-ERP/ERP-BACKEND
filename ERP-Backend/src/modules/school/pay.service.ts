@@ -2,7 +2,9 @@ import { z } from "zod";
 import { supabaseAdmin } from "../../../db/client";
 import { check } from "../../lib/db";
 import { HttpError } from "../../lib/http-error";
+import { discrepancies } from "./hr2.service";
 import { directory } from "./hr.service";
+import { lateAfter } from "./attendance2.service";
 
 /** Payroll, onboarding and probation. Statutory rules: PF 12% of basic capped at ₹1,800; ESI 0.75% up to ₹21,000 gross; professional tax on the Telangana slab. */
 const uid = z.string().uuid();
@@ -53,11 +55,11 @@ export async function assignStructure(inst: string, input: unknown) {
   return { gross };
 }
 export async function assignEmployee(inst: string, input: unknown) {
-  const i = z.object({ staff_id: uid, department: z.string().trim().max(60), designation: z.string().trim().max(100), gross: z.number().int().min(1).max(10_000_000), effective_from: date }).strict().parse(input);
+  const i = z.object({ staff_id: uid, department: z.string().trim().max(60), designation: z.string().trim().max(100), gross: z.number().int().min(1).max(10_000_000), effective_from: date, structure: z.string().trim().max(40).optional() }).strict().parse(input);
   if (!(await directory(inst)).items.some((x) => x.id === i.staff_id)) throw new HttpError(404, "Staff member not found.");
   check(await supabaseAdmin.from("hr_staff").update({ department: i.department }).eq("profile_id", i.staff_id).eq("institution_id", inst).select("profile_id"));
   check(await supabaseAdmin.from("user_profiles").update({ designation: i.designation || null }).eq("id", i.staff_id).eq("institution_id", inst).select("id"));
-  return assignStructure(inst, { staff_id: i.staff_id, structure: i.designation, basic: Math.round(i.gross / 2), allow_pct: Math.round(((i.gross - Math.round(i.gross / 2)) / Math.round(i.gross / 2)) * 100), effective_from: i.effective_from });
+  return assignStructure(inst, { staff_id: i.staff_id, structure: i.structure || i.designation.slice(0, 40), basic: Math.round(i.gross / 2), allow_pct: Math.round(((i.gross - Math.round(i.gross / 2)) / Math.round(i.gross / 2)) * 100), effective_from: i.effective_from });
 }
 export async function setOtherDeduction(inst: string, id: string, input: unknown) {
   const { amount } = z.object({ amount: z.number().int().min(0).max(10_000_000) }).strict().parse(input);
@@ -71,10 +73,12 @@ function workingDays(month: string) { const y = Number(month.slice(0, 4)), m = N
 export async function attendanceCalc(inst: string, month: string) {
   monthRe.parse(month); const from = `${month}-01`; const to = addMonths(from, 1);
   const lockRow = check(await supabaseAdmin.from("pay_settings").select("lock_day").eq("institution_id", inst).maybeSingle()) as { lock_day: number } | null; const lockTo = `${month}-${String(Math.min(31, lockRow?.lock_day ?? 25)).padStart(2, "0")}`;
-  const [st, att, lv] = await Promise.all([structures(inst), supabaseAdmin.from("staff_attendance").select("staff_id, status").eq("institution_id", inst).gte("att_date", from).lt("att_date", to).lte("att_date", lockTo).limit(100000), supabaseAdmin.from("leave_requests").select("profile_id, days, from_date").eq("institution_id", inst).eq("status", "Approved").gte("from_date", from).lt("from_date", to).limit(50000)]);
-  const A = check(att) as { staff_id: string; status: string }[]; const L = check(lv) as { profile_id: string; days: number }[]; const wd = workingDays(month);
-  const items = st.items.map((s) => { const mine = A.filter((x) => x.staff_id === s.id); const absent = mine.filter((x) => x.status === "A").length + mine.filter((x) => x.status === "H").length * 0.5; const paid = Math.min(wd, L.filter((x) => x.profile_id === s.id).reduce((n, x) => n + Number(x.days), 0)); const lop = Math.max(0, absent - paid); const present = Math.max(0, wd - lop - paid); const lopAmt = Math.round((s.gross / 30) * lop); return { id: s.id, name: s.name, emp_code: s.emp_code, department: s.department, gross: s.gross, deductions: s.deductions, working_days: wd, present, paid_leave: paid, lop, lop_amount: lopAmt, net: Math.max(0, s.gross - s.deductions - lopAmt) }; });
-  return { month, working_days: wd, items };
+  const [st, att, lv] = await Promise.all([structures(inst), supabaseAdmin.from("staff_attendance").select("staff_id, status, in_time").eq("institution_id", inst).gte("att_date", from).lt("att_date", to).lte("att_date", lockTo).limit(100000), supabaseAdmin.from("leave_requests").select("profile_id, days, from_date").eq("institution_id", inst).eq("status", "Approved").gte("from_date", from).lt("from_date", to).limit(50000)]);
+  const after = await lateAfter(inst);
+  const A = check(att) as { staff_id: string; status: string; in_time: string | null }[]; const L = check(lv) as { profile_id: string; days: number }[]; const wd = workingDays(month);
+  const items = st.items.map((s) => { const mine = A.filter((x) => x.staff_id === s.id); const absent = mine.filter((x) => x.status === "A").length + mine.filter((x) => x.status === "H").length * 0.5; const paid = Math.min(wd, L.filter((x) => x.profile_id === s.id).reduce((n, x) => n + Number(x.days), 0)); const lop = Math.max(0, absent - paid); const present = Math.max(0, wd - lop - paid); const lopAmt = Math.round((s.gross / 30) * lop); const late_marks = mine.filter((x) => x.status === "L" || (x.status === "P" && !!x.in_time && x.in_time.slice(0, 5) > after)).length; return { late_marks, id: s.id, name: s.name, emp_code: s.emp_code, department: s.department, designation: s.designation, gross: s.gross, deductions: s.deductions, pf: s.pf, esi: s.esi, pt: s.pt, tds: s.other, working_days: wd, present, paid_leave: paid, lop, lop_amount: lopAmt, net: Math.max(0, s.gross - s.deductions - lopAmt) }; });
+  const last = new Date(Date.parse(to + "T00:00:00Z") - 86400000).toISOString().slice(0, 10);
+  return { month, working_days: wd, counted_to: [lockTo, last, today()].sort()[0], items };
 }
 export async function runs(inst: string) {
   const r = check(await supabaseAdmin.from("pay_runs").select("id, month, status, staff, gross, deductions, net").eq("institution_id", inst).order("month", { ascending: false }).limit(60)) as { id: string; month: string; status: string; staff: number; gross: number; deductions: number; net: number }[];
@@ -109,9 +113,21 @@ export async function payStatus(inst: string) {
 export async function probation(inst: string) {
   const [r, st, rv] = await Promise.all([supabaseAdmin.from("hr_probation").select("id, staff_id, started_on, ends_on, reviewer, status, decided_on").eq("institution_id", inst).order("ends_on"), directory(inst), supabaseAdmin.from("hr_appraisals").select("staff_id, rating, status").eq("institution_id", inst).eq("kind", "Reviews").eq("status", "Completed")]);
   const K = new Map(st.items.map((s) => [s.id, s])); const V = check(rv) as { staff_id: string; rating: number | null }[]; const now = today(); const month = now.slice(0, 7);
-  const items = (check(r) as { id: string; staff_id: string; started_on: string; ends_on: string; reviewer: string; status: string; decided_on: string | null }[]).map((x) => { const mine = V.filter((y) => y.staff_id === x.staff_id && y.rating); const avg = mine.length ? Math.round((mine.reduce((n, y) => n + (y.rating ?? 0), 0) / mine.length) * 10) / 10 : null; const open = ["On probation", "Extended"].includes(x.status); const due = open && daysBetween(now, x.ends_on) <= 30; return { ...x, name: K.get(x.staff_id)?.name ?? "", detail: [K.get(x.staff_id)?.designation, K.get(x.staff_id)?.department].filter(Boolean).join(" · "), reviews: mine.length, rating: avg, shown: due ? "Due for decision" : x.status }; });
+  // reviews written on the Probation Review tab (migration 120) count first; older "Reviews" appraisals otherwise
+  const pr = await supabaseAdmin.from("hr_probation_reviews").select("probation_id, ratings").eq("institution_id", inst);
+  const P = (pr.error ? [] : pr.data) as { probation_id: string; ratings: number[] }[];
+  const items = (check(r) as { id: string; staff_id: string; started_on: string; ends_on: string; reviewer: string; status: string; decided_on: string | null }[]).map((x) => { const own = P.filter((y) => y.probation_id === x.id).map((y) => ({ rating: y.ratings.reduce((n, v) => n + v, 0) / y.ratings.length })); const mine = own.length ? own : V.filter((y) => y.staff_id === x.staff_id && y.rating); const avg = mine.length ? Math.round((mine.reduce((n, y) => n + (y.rating ?? 0), 0) / mine.length) * 10) / 10 : null; const open = ["On probation", "Extended"].includes(x.status); const due = open && daysBetween(now, x.ends_on) <= 30; return { ...x, name: K.get(x.staff_id)?.name ?? "", detail: [K.get(x.staff_id)?.designation, K.get(x.staff_id)?.department].filter(Boolean).join(" · "), reviews: mine.length, rating: avg, shown: due ? "Due for decision" : x.status }; });
   const weak = items.filter((x) => ["On probation", "Extended"].includes(x.status) && x.rating !== null && x.rating < 3.5)[0];
   return { staff: st.items.map((s) => ({ id: s.id, name: s.name })), items, on: items.filter((x) => ["On probation", "Extended"].includes(x.status)).length, due: items.filter((x) => x.shown === "Due for decision" && x.ends_on.startsWith(month) || (x.shown === "Due for decision" && x.ends_on <= now)).length, confirmed: items.filter((x) => x.status === "Confirmed" && (x.decided_on ?? "").startsWith(now.slice(0, 4))).length, extended: items.filter((x) => x.status === "Extended").length, note: weak ? `${weak.name} scored ${weak.rating} in probation reviews. Extending by 3 months with a mentor is suggested.` : "" };
+}
+/** The reporting manager's monthly or end-of-probation review. It records a recommendation; the decision is taken separately. */
+export async function reviewProbation(inst: string, id: string, input: unknown, actor?: string) {
+  const i = z.object({ kind: z.enum(["Monthly", "End of probation"]), ratings: z.array(z.number().int().min(1).max(5)).length(6, "Rate all six areas."), recommendation: z.enum(["Confirm", "Extend", "End"]), comments: z.string().trim().max(500).optional() }).strict().parse(input);
+  const p = check(await supabaseAdmin.from("hr_probation").select("id, status").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; status: string } | null;
+  if (!p) throw new HttpError(404, "Not found."); if (!["On probation", "Extended"].includes(p.status)) throw new HttpError(409, "That probation is already closed.");
+  const r = await supabaseAdmin.from("hr_probation_reviews").insert({ institution_id: inst, probation_id: id, kind: i.kind, ratings: i.ratings, recommendation: i.recommendation, comments: i.comments ?? "", reviewed_by: actor ?? null }).select("id");
+  if (r.error && ["42P01", "PGRST205"].includes(r.error.code)) throw new HttpError(409, "This needs a database update (migration 120) that has not been applied yet.");
+  check(r); return { ok: true };
 }
 export async function addProbation(inst: string, input: unknown) {
   const i = z.object({ staff_id: uid, started_on: date, months: z.number().int().min(1).max(12), reviewer: z.string().trim().max(100).optional() }).strict().parse(input);
@@ -134,7 +150,8 @@ export const ITEMS: [string, string, string][] = [["certs", "Original certificat
 export async function joiners(inst: string) {
   const [c, o, done, chk] = await Promise.all([supabaseAdmin.from("hr_candidates").select("id, name, op:opening_id(position)").eq("institution_id", inst).eq("stage", "Accepted"), supabaseAdmin.from("hr_offers").select("candidate_id, joining_on").eq("institution_id", inst).eq("status", "Accepted"), supabaseAdmin.from("hr_onboard").select("candidate_id, item_key"), supabaseAdmin.from("hr_checks").select("candidate_id, employer, refs, police, certificates, id_address").eq("institution_id", inst)]);
   const O = new Map((check(o) as { candidate_id: string; joining_on: string }[]).map((x) => [x.candidate_id, x.joining_on])); const D = check(done) as { candidate_id: string; item_key: string }[]; const K = new Map((check(chk) as { candidate_id: string; employer: boolean; refs: boolean; police: boolean; certificates: boolean; id_address: boolean }[]).map((x) => [x.candidate_id, x]));
-  return { items_def: ITEMS.map(([key, label, owner]) => ({ key, label, owner })), items: (check(c) as unknown as { id: string; name: string; op: { position: string } | { position: string }[] | null }[]).map((x) => { const mine = D.filter((d) => d.candidate_id === x.id).map((d) => d.item_key); const k = K.get(x.id); const all = k ? k.employer && k.refs && k.police && k.certificates && k.id_address : false; const p = Array.isArray(x.op) ? x.op[0]?.position : x.op?.position; return { id: x.id, name: x.name, position: p ?? "", joining_on: O.get(x.id) ?? null, done: mine, count: mine.length, total: ITEMS.length, background: all ? "Verified" : "In progress", status: mine.length === ITEMS.length ? "Ready" : "Joining" }; }) };
+  const notes = await discrepancies(inst);
+  return { items_def: ITEMS.map(([key, label, owner]) => ({ key, label, owner })), items: (check(c) as unknown as { id: string; name: string; op: { position: string } | { position: string }[] | null }[]).map((x) => { const mine = D.filter((d) => d.candidate_id === x.id).map((d) => d.item_key); const k = K.get(x.id); const all = k ? k.employer && k.refs && k.police && k.certificates && k.id_address : false; const p = Array.isArray(x.op) ? x.op[0]?.position : x.op?.position; return { id: x.id, name: x.name, position: p ?? "", joining_on: O.get(x.id) ?? null, done: mine, count: mine.length, total: ITEMS.length, background: notes?.get(x.id) ? "Discrepancy" : all ? "Verified" : "In progress", status: mine.length === ITEMS.length ? "Ready" : "Joining" }; }) };
 }
 export async function tick(inst: string, id: string, input: unknown) {
   const i = z.object({ item: z.enum(ITEMS.map((x) => x[0]) as [string, ...string[]]), done: z.boolean() }).strict().parse(input);

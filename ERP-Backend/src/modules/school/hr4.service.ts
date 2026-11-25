@@ -3,7 +3,7 @@ import { supabaseAdmin } from "../../../db/client";
 import { check } from "../../lib/db";
 import { HttpError } from "../../lib/http-error";
 import { directory } from "./hr.service";
-import { leaveBalance } from "./hr3.service";
+import { leaveBalance, bandOf } from "./hr3.service";
 import { yearStart } from "./fees.service";
 
 /** HR, part 4: staff exit, full and final, Employee 360, analytics, compliance, scheduled reports and vacancies. */
@@ -62,7 +62,17 @@ export async function clearDept(inst: string, id: string, input: unknown) {
   if (!r.length) throw new HttpError(409, "That department is already clear or not applicable."); return { ok: true };
 }
 /** Pay to the last day, earned leave encashment, gratuity after 5 years, less advances. Basic is taken as half the monthly pay. */
+export const NEEDS_120 = "This needs a database update (migration 120) that has not been applied yet.";
+type Line = { item: string; amount: number };
+/** Settlements already paid, by exit; null until migration 120 has been applied. */
+async function paidSettlements(inst: string) {
+  const r = await supabaseAdmin.from("hr_exits").select("id, settled_on, settled_lines, settled_net, settled_ref").eq("institution_id", inst).not("settled_on", "is", null);
+  return r.error ? null : new Map((r.data as { id: string; settled_on: string; settled_lines: Line[]; settled_net: number; settled_ref: string | null }[]).map((x) => [x.id, x]));
+}
 export async function fullAndFinal(inst: string) {
+  const paid = await paidSettlements(inst);
+  // Payroll Settings > Payroll Policies: leave encashment at exit (on unless the school turns it off)
+  const encash = (check(await supabaseAdmin.from("pay_settings").select("encash").eq("institution_id", inst).maybeSingle()) as { encash: boolean } | null)?.encash ?? true;
   const [c, st, bal, hs, adv] = await Promise.all([clearance(inst), directory(inst), leaveBalance(inst), supabaseAdmin.from("hr_staff").select("profile_id, monthly_salary, joined_on").eq("institution_id", inst).limit(5000), supabaseAdmin.from("staff_advances").select("staff_id, given, settled").eq("institution_id", inst)]);
   const ex = check(await supabaseAdmin.from("hr_exits").select("id, staff_id").eq("institution_id", inst).in("status", ["Approved", "Relieved"])) as { id: string; staff_id: string }[];
   const H = new Map((check(hs) as { profile_id: string; monthly_salary: number | null; joined_on: string | null }[]).map((x) => [x.profile_id, x]));
@@ -71,10 +81,12 @@ export async function fullAndFinal(inst: string) {
     const sid = ex.find((e) => e.id === x.id)!.staff_id; const h = H.get(sid); const sal = h?.monthly_salary ?? 0; const basic = sal * 0.5;
     const d = Number(x.last_day.slice(8)); const years = h?.joined_on ? Math.max(0, daysBetween(h.joined_on, x.last_day) / 365.25) : 0;
     const left = bal.items.find((b) => b.id === sid)?.earned.left ?? 0;
-    const pay = Math.round((sal / 30) * Math.min(30, d)); const enc = Math.round((basic / 26) * left); const gratuity = years >= 5 ? Math.round((basic / 26) * 15 * Math.floor(years)) : 0;
+    const pay = Math.round((sal / 30) * Math.min(30, d)); const enc = encash ? Math.round((basic / 26) * left) : 0; const gratuity = years >= 5 ? Math.round((basic / 26) * 15 * Math.floor(years)) : 0;
     const advance = A.filter((a) => a.staff_id === sid).reduce((n, a) => n + Math.max(0, a.given - a.settled), 0);
     const month = new Date(x.last_day + "T00:00:00Z").toLocaleDateString("en-IN", { month: "short", timeZone: "UTC" });
-    return { id: x.id, name: x.name, designation: x.designation, years: Math.round(years * 10) / 10, last_day: x.last_day, no_salary: sal === 0, lines: [{ item: `Salary for ${Math.min(30, d)} days of ${month}`, amount: pay }, { item: `Leave encashment (${left} days earned leave)`, amount: enc }, { item: years >= 5 ? `Gratuity (${Math.floor(years)} years)` : `Gratuity (${Math.floor(years)} years, needs 5)`, amount: gratuity }, { item: "Advance recovered", amount: -advance }], net: pay + enc + gratuity - advance, status: x.overall === "Cleared" ? "Ready for Finance" : "Pending" };
+    const done = paid?.get(x.id);
+    const out = { id: x.id, staff_id: sid, name: x.name, designation: x.designation, years: Math.round(years * 10) / 10, last_day: x.last_day, no_salary: sal === 0, paid_on: done?.settled_on ?? null, paid_ref: done?.settled_ref ?? null, lines: [{ item: `Salary for ${Math.min(30, d)} days of ${month}`, amount: pay }, { item: encash ? `Leave encashment (${left} days earned leave)` : "Leave encashment (switched off in Payroll Settings)", amount: enc }, { item: years >= 5 ? `Gratuity (${Math.floor(years)} years)` : `Gratuity (${Math.floor(years)} years, needs 5)`, amount: gratuity }, { item: "Advance recovered", amount: -advance }], net: pay + enc + gratuity - advance, status: x.overall === "Cleared" ? "Ready for Finance" : "Pending" };
+    return done ? { ...out, lines: done.settled_lines, net: done.settled_net, status: "Paid" } : out;
   }), _st: st.items.length };
 }
 
@@ -82,9 +94,9 @@ export async function fullAndFinal(inst: string) {
 export async function profile360(inst: string, id: string) {
   const s = (await staffMap(inst)).get(id); if (!s) throw new HttpError(404, "Staff member not found.");
   const ys = await yearStart(inst);
-  const [h, sh, bal, cy, docs, q] = await Promise.all([supabaseAdmin.from("hr_staff").select("monthly_salary, joined_on").eq("profile_id", id).maybeSingle(), supabaseAdmin.from("hr_salary_history").select("id, from_on, before_amt, after_amt, reason").eq("staff_id", id).order("from_on", { ascending: false }), leaveBalance(inst), supabaseAdmin.from("hr_cycle").select("cycle, self_score, reviewer_score, closed").eq("staff_id", id).eq("closed", true).order("cycle", { ascending: false }).limit(3), supabaseAdmin.from("hr_documents").select("doc_type, file_name, valid_until, status").eq("staff_id", id), supabaseAdmin.from("hr_qualifications").select("title, year").eq("profile_id", id)]);
+  const [h, sh, bal, cy, docs, q] = await Promise.all([supabaseAdmin.from("hr_staff").select("monthly_salary, joined_on").eq("profile_id", id).maybeSingle(), supabaseAdmin.from("hr_salary_history").select("id, from_on, before_amt, after_amt, reason").eq("staff_id", id).order("from_on", { ascending: false }), leaveBalance(inst), supabaseAdmin.from("hr_cycle").select("cycle, self_score, reviewer_score, closed, inc_pct").eq("staff_id", id).eq("closed", true).order("cycle", { ascending: false }).limit(3), supabaseAdmin.from("hr_documents").select("doc_type, file_name, valid_until, status").eq("staff_id", id), supabaseAdmin.from("hr_qualifications").select("title, year").eq("profile_id", id)]);
   const hh = check(h) as { monthly_salary: number | null; joined_on: string | null } | null; const H = check(sh) as { id: string; from_on: string; before_amt: number | null; after_amt: number; reason: string }[]; const b = bal.items.find((x) => x.id === id);
-  const C = (check(cy) as { cycle: string; self_score: number | null; reviewer_score: number | null }[]).map((x) => { const f = Math.round(Number(x.self_score) * 30 + Number(x.reviewer_score) * 70) / 100; return { cycle: x.cycle, score: f }; });
+  const C = (check(cy) as { cycle: string; self_score: number | null; reviewer_score: number | null; inc_pct: number | null }[]).map((x) => { const f = Math.round(Number(x.self_score) * 30 + Number(x.reviewer_score) * 70) / 100; return { cycle: x.cycle, score: f, rating: bandOf(f).band, increment: x.inc_pct }; });
   const now = today(); const joined = hh?.joined_on ?? null;
   const timeline = [...H.map((x) => ({ on: x.from_on, title: x.before_amt ? `Salary revised ${x.after_amt >= x.before_amt ? "+" : ""}${Math.round(((x.after_amt - x.before_amt) / x.before_amt) * 100)}%` : "Joining salary", text: x.before_amt ? `₹${x.before_amt.toLocaleString("en-IN")} → ₹${x.after_amt.toLocaleString("en-IN")} a month${x.reason ? ` · ${x.reason}` : ""}` : `₹${x.after_amt.toLocaleString("en-IN")} a month` })), ...(joined ? [{ on: joined, title: `Joined as ${s.designation || "staff"}`, text: s.department }] : []), ...(check(q) as { title: string; year: number | null }[]).filter((x) => x.year).map((x) => ({ on: `${x.year}-01-01`, title: x.title, text: "Qualification" }))].sort((a, c) => (a.on < c.on ? 1 : -1));
   return { id, name: s.name, emp_code: s.emp_code, designation: s.designation, department: s.department, status: s.status, salary: hh?.monthly_salary ?? 0, joined, years: joined ? Math.floor(daysBetween(joined, now) / 365.25) : 0, leave: b ? { casual: b.casual, sick: b.sick, earned: b.earned, total_left: b.total_left } : null, year: ys.slice(0, 4), last_score: C[0]?.score ?? null, appraisals: C, salary_history: H, timeline, documents: (check(docs) as { doc_type: string; file_name: string; valid_until: string | null; status: string }[]).map((d) => ({ ...d, status: d.valid_until && d.valid_until < now ? "Expired" : d.valid_until && d.valid_until < addDays(now, 120) ? "Expiring soon" : d.status })) };
@@ -160,7 +172,11 @@ const STAGES = ["Requested", "Principal OK", "Approved", "Posted", "Filled"] as 
 export async function vacancies(inst: string) {
   const r = check(await supabaseAdmin.from("hr_vacancies").select("id, code, post, department, vtype, note, posts, cost_year, requested_by, requested_on, stage, need_from").eq("institution_id", inst).order("requested_on", { ascending: false }).order("code", { ascending: false })) as { id: string; code: string; post: string; department: string; vtype: string; note: string; posts: number; cost_year: number; requested_by: string; requested_on: string; stage: string; need_from: string | null }[];
   const open = r.filter((x) => ["Approved", "Posted"].includes(x.stage)); const filled = r.filter((x) => x.stage === "Filled");
-  return { items: r.map((x) => ({ ...x, step: x.stage === "Rejected" ? 0 : STAGES.indexOf(x.stage as (typeof STAGES)[number]) + 1 })), open: open.length, waiting: r.filter((x) => ["Requested", "Principal OK"].includes(x.stage)).length, open_cost: open.reduce((n, x) => n + x.cost_year * x.posts, 0), filled: filled.length };
+  // the filled date comes with migration 119
+  const fd = await supabaseAdmin.from("hr_vacancies").select("id, filled_on").eq("institution_id", inst);
+  const on = new Map(((fd.data ?? []) as { id: string; filled_on: string | null }[]).map((x) => [x.id, x.filled_on]));
+  const days = filled.flatMap((x) => (on.get(x.id) ? [daysBetween(x.requested_on, on.get(x.id)!)] : []));
+  return { filled_this_year: filled.filter((x) => on.get(x.id)?.startsWith(today().slice(0, 4))).length, avg_days: days.length ? Math.round(days.reduce((n, d) => n + d, 0) / days.length) : null, items: r.map((x) => ({ ...x, step: x.stage === "Rejected" ? 0 : STAGES.indexOf(x.stage as (typeof STAGES)[number]) + 1 })), open: open.length, waiting: r.filter((x) => ["Requested", "Principal OK"].includes(x.stage)).length, open_cost: open.reduce((n, x) => n + x.cost_year * x.posts, 0), filled: filled.length };
 }
 export async function addVacancy(inst: string, input: unknown, who: string) {
   const i = z.object({ post: z.string().trim().min(2, "Enter the post.").max(100), department: z.string().trim().max(60).optional(), vtype: z.enum(["New post", "Replacement"]), note: z.string().trim().max(200).optional(), posts: z.number().int().min(1).max(50), cost_year: z.number().int().min(0).max(100_000_000), need_from: date.nullable().optional() }).strict().parse(input);
@@ -173,10 +189,12 @@ export async function moveVacancy(inst: string, id: string, input: unknown, role
   const top = ["Principal", "InstitutionAdmin"].includes(role);
   let next: string;
   if (action === "approve") { if (v.stage === "Requested") next = "Principal OK"; else if (v.stage === "Principal OK") next = "Approved"; else throw new HttpError(409, "Nothing to approve."); if (next === "Principal OK" && !top) throw new HttpError(403, "The Principal approves first."); if (next === "Approved" && !["Accountant", "Finance", ...["Principal", "InstitutionAdmin"]].includes(role)) throw new HttpError(403, "Finance approves next."); }
-  else if (action === "reject") { if (!["Requested", "Principal OK"].includes(v.stage)) throw new HttpError(409, "Too late to reject."); next = "Rejected"; }
+  else if (action === "reject") { if (role === "HR") throw new HttpError(403, "The Principal or Finance rejects a vacancy."); if (!["Requested", "Principal OK"].includes(v.stage)) throw new HttpError(409, "Too late to reject."); next = "Rejected"; }
   else if (action === "post") { if (v.stage !== "Approved") throw new HttpError(409, "Approve it first."); next = "Posted"; }
   else { if (v.stage !== "Posted") throw new HttpError(409, "Post it first."); next = "Filled"; }
   check(await supabaseAdmin.from("hr_vacancies").update({ stage: next }).eq("id", id).eq("institution_id", inst).select("id"));
+  // ignored until migration 119 adds the column
+  if (next === "Filled") await supabaseAdmin.from("hr_vacancies").update({ filled_on: today() }).eq("id", id).eq("institution_id", inst);
   return { stage: next };
 }
 export async function sanctioned(inst: string) {
@@ -190,4 +208,60 @@ export async function addSanctioned(inst: string, input: unknown) {
   const i = z.object({ department: z.string().trim().min(2).max(60), designation: z.string().trim().min(2).max(100), sanctioned: z.number().int().min(0).max(1000) }).strict().parse(input);
   check(await supabaseAdmin.from("hr_sanctioned").upsert({ institution_id: inst, ...i }, { onConflict: "institution_id,department,designation" }).select("id"));
   return { ok: true };
+}
+
+// ═════════════ final settlement payment ═════════════
+/** Accounts records that a cleared leaver's settlement was paid. The working is kept as it was on that day. */
+export async function paySettlement(inst: string, id: string, input: unknown, role: string, actor?: string) {
+  const i = z.object({ tds: z.number().int().min(0).max(100_000_000), reference: z.string().trim().min(2, "Enter the payment reference.").max(80) }).strict().parse(input);
+  if (!["Accountant", "Finance", "Principal", "InstitutionAdmin"].includes(role)) throw new HttpError(403, "Only accounts or the principal can pay a final settlement.");
+  if (!(await paidSettlements(inst))) throw new HttpError(409, NEEDS_120);
+  const x = (await fullAndFinal(inst)).items.find((s) => s.id === id);
+  if (!x) throw new HttpError(404, "Settlement not found.");
+  if (actor && x.staff_id === actor) throw new HttpError(403, "Someone else has to pay your own settlement.");
+  if (x.status === "Paid") throw new HttpError(409, "That settlement is already paid.");
+  if (x.status !== "Ready for Finance") throw new HttpError(409, "Every department must clear the leaver first.");
+  if (i.tds > x.net) throw new HttpError(400, "The tax is more than the amount payable.");
+  const r = check(await supabaseAdmin.from("hr_exits").update({ settled_on: today(), settled_lines: [...x.lines, { item: "TDS", amount: -i.tds }], settled_net: x.net - i.tds, settled_ref: i.reference, settled_by: actor ?? null }).eq("id", id).eq("institution_id", inst).is("settled_on", null).select("id")) as unknown[];
+  if (!r.length) throw new HttpError(409, "That settlement is already paid.");
+  return { ok: true, net: x.net - i.tds };
+}
+
+// ═════════════ exit interviews ═════════════
+export async function exitInterviews(inst: string) {
+  const ys = await yearStart(inst);
+  const [x, st, hs, iv] = await Promise.all([supabaseAdmin.from("hr_exits").select("id, staff_id, last_day, reason, status").eq("institution_id", inst).in("status", ["Approved", "Relieved"]).order("last_day", { ascending: false }).limit(2000), directory(inst), supabaseAdmin.from("hr_staff").select("profile_id, joined_on").eq("institution_id", inst).limit(5000), supabaseAdmin.from("hr_exit_interviews").select("exit_id, reason, would_rejoin, said").eq("institution_id", inst)]);
+  const E = check(x) as { id: string; staff_id: string; last_day: string; reason: string; status: string }[];
+  const S = new Map(st.items.map((s) => [s.id, s])); const J = new Map((check(hs) as { profile_id: string; joined_on: string | null }[]).map((r) => [r.profile_id, r.joined_on]));
+  const I = new Map(((iv.error ? [] : iv.data) as { exit_id: string; reason: string; would_rejoin: boolean; said: string }[]).map((r) => [r.exit_id, r]));
+  const year = E.filter((e) => e.last_day >= ys);
+  const count = new Map<string, number>(); for (const e of year) { const why = I.get(e.id)?.reason || e.reason || "Not given"; count.set(why, (count.get(why) ?? 0) + 1); }
+  const reasons = [...count.entries()].sort((a, b) => b[1] - a[1]);
+  const answered = year.flatMap((e) => (I.has(e.id) ? [I.get(e.id)!] : []));
+  const spans = year.flatMap((e) => (J.get(e.staff_id) ? [daysBetween(J.get(e.staff_id)!, e.last_day) / 365.25] : []));
+  const active = st.items.filter((s) => s.status === "Active").length;
+  return {
+    ready: !iv.error, year: `${ys.slice(0, 4)}–${String(Number(ys.slice(0, 4)) + 1).slice(2)}`, exits: year.length,
+    attrition: active + year.length ? Math.round((year.length / (active + year.length)) * 1000) / 10 : 0,
+    would_rejoin: answered.length ? Math.round((answered.filter((a) => a.would_rejoin).length / answered.length) * 100) : null,
+    avg_years: spans.length ? Math.round((spans.reduce((n, v) => n + Math.max(0, v), 0) / spans.length) * 10) / 10 : null,
+    reasons,
+    items: E.map((e) => { const a = I.get(e.id); return { id: e.id, staff_id: e.staff_id, name: S.get(e.staff_id)?.name ?? "", designation: S.get(e.staff_id)?.designation ?? "", reason: a?.reason || e.reason, status: a ? "Closed" : "Pending", would_rejoin: a ? a.would_rejoin : null, said: a?.said ?? "" }; }),
+  };
+}
+export async function saveExitInterview(inst: string, id: string, input: unknown, actor?: string) {
+  const i = z.object({ reason: z.string().trim().min(2, "Enter the reason.").max(80), would_rejoin: z.boolean(), said: z.string().trim().max(500).optional() }).strict().parse(input);
+  const x = check(await supabaseAdmin.from("hr_exits").select("id, status").eq("id", id).eq("institution_id", inst).maybeSingle()) as { id: string; status: string } | null;
+  if (!x) throw new HttpError(404, "Not found.");
+  if (!["Approved", "Relieved"].includes(x.status)) throw new HttpError(409, "Approve the exit first.");
+  const r = await supabaseAdmin.from("hr_exit_interviews").upsert({ exit_id: id, institution_id: inst, reason: i.reason, would_rejoin: i.would_rejoin, said: i.said ?? "", recorded_on: today(), recorded_by: actor ?? null }, { onConflict: "exit_id" }).select("exit_id");
+  if (r.error && ["42P01", "PGRST205"].includes(r.error.code)) throw new HttpError(409, NEEDS_120);
+  check(r); return { ok: true };
+}
+
+// ═════════════ exit letters ═════════════
+export async function exitLetters(inst: string) {
+  const [f, hs, sc, st] = await Promise.all([fullAndFinal(inst), supabaseAdmin.from("hr_staff").select("profile_id, joined_on").eq("institution_id", inst).limit(5000), supabaseAdmin.from("institutions").select("name, address").eq("id", inst).maybeSingle(), directory(inst)]);
+  const J = new Map((check(hs) as { profile_id: string; joined_on: string | null }[]).map((r) => [r.profile_id, r.joined_on])); const s = sc.data as { name: string; address: string | null } | null;
+  return { school: s?.name ?? "", address: s?.address ?? "", principal: st.items.find((x) => x.designation === "Principal")?.name ?? "", items: f.items.map((x) => ({ id: x.id, name: x.name, designation: x.designation, joined_on: J.get(x.staff_id) ?? null, last_day: x.last_day, settlement: x.status === "Paid" ? "Paid" : "Pending", can_issue: x.status === "Paid" && x.last_day <= today() })) };
 }

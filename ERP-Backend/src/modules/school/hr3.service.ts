@@ -54,10 +54,10 @@ export async function saveLeavePolicy(inst: string, input: unknown) {
 const LEVELS = ["HOD or coordinator", "Vice principal", "Principal"]; const SHORT = ["HOD", "Vice principal", "Principal"]; const LIMIT_H = [24, 48, 72];
 const needed = (days: number) => (days <= 2 ? 1 : days <= 5 ? 2 : 3);
 export async function leaveApprovals(inst: string) {
-  const [rows, st] = await Promise.all([supabaseAdmin.from("leave_requests").select("id, code, profile_id, leave_type, from_date, days, level, level_since, created_at").eq("institution_id", inst).eq("status", "Pending").order("created_at").limit(1000), staffMap(inst)]);
-  const now = Date.now(); const R = check(rows) as { id: string; code: string; profile_id: string; leave_type: string; from_date: string; days: number; level: number; level_since: string; created_at: string }[];
+  const [rows, st] = await Promise.all([supabaseAdmin.from("leave_requests").select("id, code, profile_id, leave_type, from_date, to_date, days, level, level_since, created_at").eq("institution_id", inst).eq("status", "Pending").order("created_at").limit(1000), staffMap(inst)]);
+  const now = Date.now(); const R = check(rows) as { id: string; code: string; profile_id: string; leave_type: string; from_date: string; to_date: string; days: number; level: number; level_since: string; created_at: string }[];
   for (const r of R) if (r.level < 3 && now - Date.parse(r.level_since) > LIMIT_H[r.level - 1] * 3600000) { r.level += 1; r.level_since = new Date().toISOString(); check(await supabaseAdmin.from("leave_requests").update({ level: r.level, level_since: r.level_since }).eq("id", r.id).eq("institution_id", inst).select("id")); }
-  const items = R.map((r) => { const hrs = Math.floor((now - Date.parse(r.level_since)) / 3600000); const need = Math.max(needed(Number(r.days)), r.level); return { id: r.id, code: r.code, employee: st.get(r.profile_id)?.name ?? "", detail: [st.get(r.profile_id)?.designation, st.get(r.profile_id)?.department].filter(Boolean).join(" · "), leave: `${r.leave_type} leave`, from: r.from_date, days: Number(r.days), route: SHORT.slice(0, need), level: r.level, waiting: hrs < 48 ? `${hrs} h` : `${Math.floor(hrs / 24)} d`, overdue: hrs > LIMIT_H[r.level - 1] * 0.75, status: `With ${SHORT[r.level - 1]}` }; });
+  const items = R.map((r) => { const hrs = Math.floor((now - Date.parse(r.level_since)) / 3600000); const need = Math.max(needed(Number(r.days)), r.level); return { id: r.id, code: r.code, employee: st.get(r.profile_id)?.name ?? "", detail: [st.get(r.profile_id)?.designation, st.get(r.profile_id)?.department].filter(Boolean).join(" · "), leave: `${r.leave_type} leave`, from: r.from_date, to: r.to_date, days: Number(r.days), route: SHORT.slice(0, need), level: r.level, waiting: hrs < 48 ? `${hrs} h` : `${Math.floor(hrs / 24)} d`, overdue: hrs > LIMIT_H[r.level - 1] * 0.75, status: `With ${SHORT[r.level - 1]}` }; });
   return { levels: LEVELS.map((label, i) => ({ label: `Level ${i + 1} · ${label}`, count: items.filter((x) => x.level === i + 1).length, overdue: items.filter((x) => x.level === i + 1 && x.overdue).length })), items };
 }
 export async function decideLeaveStep(inst: string, id: string, input: unknown, role: string, actor?: string) {
@@ -80,9 +80,12 @@ export async function leaveBalance(inst: string) {
   const ys = await yearStart(inst);
   const [st, types, reqs] = await Promise.all([directory(inst), leaveTypes(inst), supabaseAdmin.from("leave_requests").select("profile_id, leave_type, days").eq("institution_id", inst).eq("status", "Approved").gte("from_date", ys).limit(50000)]);
   const R = check(reqs) as { profile_id: string; leave_type: string; days: number }[];
+  const runs = check(await supabaseAdmin.from("pay_runs").select("id").eq("institution_id", inst).gte("month", ys.slice(0, 7))) as { id: string }[];
+  const lines = runs.length ? (check(await supabaseAdmin.from("pay_run_lines").select("staff_id, lop").in("run_id", runs.map((r) => r.id)).limit(100000)) ?? []) as { staff_id: string; lop: number }[] : [];
+  const lop = (id: string) => round1(lines.filter((l) => l.staff_id === id).reduce((n, l) => n + Number(l.lop), 0));
   const days = (name: string) => types.items.find((t) => t.name === name)?.days_per_year ?? 0;
   const calc = (id: string, name: string, core: string) => { const allowed = days(name); const used = R.filter((x) => x.profile_id === id && x.leave_type === core).reduce((n, x) => n + Number(x.days), 0); return { allowed, used, left: Math.max(0, allowed - used) }; };
-  return { year: ys.slice(0, 4), items: st.items.map((s) => { const casual = calc(s.id, "Casual leave", "Casual"), sick = calc(s.id, "Sick leave", "Sick"), earned = calc(s.id, "Earned leave", "Earned"); return { id: s.id, name: s.name, designation: s.designation, department: s.department, casual, sick, earned, total_left: casual.left + sick.left + earned.left }; }) };
+  return { year: ys.slice(0, 4), items: st.items.map((s) => { const casual = calc(s.id, "Casual leave", "Casual"), sick = calc(s.id, "Sick leave", "Sick"), earned = calc(s.id, "Earned leave", "Earned"); return { id: s.id, name: s.name, designation: s.designation, department: s.department, casual, sick, earned, lop: lop(s.id), total_left: casual.left + sick.left + earned.left }; }) };
 }
 export async function compOffs(inst: string) {
   const now = today();
@@ -114,7 +117,8 @@ export async function addDocument(inst: string, input: unknown) {
   if (!(await staffMap(inst)).has(i.staff_id)) throw new HttpError(404, "Staff member not found.");
   return check(await supabaseAdmin.from("hr_documents").insert({ institution_id: inst, ...i, valid_until: i.valid_until ?? null, uploaded_on: today() }).select("id").single());
 }
-export async function verifyDocument(inst: string, id: string) {
+export async function verifyDocument(inst: string, id: string, notBy?: string) {
+  if (notBy) { const d = check(await supabaseAdmin.from("hr_documents").select("staff_id").eq("id", id).eq("institution_id", inst).maybeSingle()) as { staff_id: string } | null; if (d?.staff_id === notBy) throw new HttpError(403, "You cannot verify your own document. Ask the School Admin."); }
   const r = check(await supabaseAdmin.from("hr_documents").update({ status: "Verified" }).eq("id", id).eq("institution_id", inst).select("id")) as unknown[];
   if (!r.length) throw new HttpError(404, "Not found."); return { ok: true };
 }
@@ -202,7 +206,7 @@ export async function increments(inst: string) {
   const items = st.items.filter((s) => s.type === "Teaching").map((s) => {
     const kra = cy.items.find((x) => x.id === s.id)?.final ?? 0; const f = fb.items.find((x) => x.id === s.id)?.score ?? 0; const cl = C.filter((x) => x.staff_id === s.id); const cs = cl.length ? cl.reduce((n, x) => n + x.level, 0) / cl.length : 0;
     const combined = Math.round((kra * 0.5 + f * 0.3 + cs * 0.2) * 100) / 100; const b = bandOf(combined); const inc = saved.get(s.id)?.inc_pct ?? b.inc; const salary = sal.get(s.id) ?? 0;
-    return { id: s.id, name: s.name, kra, feedback: f, competency: Math.round(cs * 10) / 10, combined, band: b.band, inc, salary, new_salary: Math.round(salary * (1 + inc / 100)), cost: Math.round(salary * (inc / 100)), sent: saved.get(s.id)?.inc_sent ?? false };
+    return { id: s.id, name: s.name, designation: s.designation, kra, feedback: f, competency: Math.round(cs * 10) / 10, combined, band: b.band, inc, salary, new_salary: Math.round(salary * (1 + inc / 100)), cost: Math.round(salary * (inc / 100)), sent: saved.get(s.id)?.inc_sent ?? false };
   });
   const payroll = items.reduce((n, x) => n + x.salary, 0); const cost = items.reduce((n, x) => n + x.cost, 0); const budget = Math.round(payroll * (budgetPct / 100));
   return { cycle: cyc, bands: BANDS, budget_pct: budgetPct, items, cost, budget, over: Math.max(0, cost - budget) };

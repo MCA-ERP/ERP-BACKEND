@@ -2,6 +2,7 @@ import { z } from "zod";
 import { supabaseAdmin } from "../../../db/client";
 import { check } from "../../lib/db";
 import { HttpError } from "../../lib/http-error";
+import { mayManage } from "./staff-roles";
 import { getSettings, saveSettings } from "./settings.service";
 import { profile } from "./custom.service";
 import { roster } from "./student-mgmt.service";
@@ -78,10 +79,11 @@ export async function users(inst: string) {
   const u = check(await supabaseAdmin.from("user_profiles").select("id, first_name, last_name, email, status, last_login_at, roles:role_id(name, display_name)").eq("institution_id", inst).order("first_name").limit(3000)) as unknown as { id: string; first_name: string; last_name: string; email: string; status: string | null; last_login_at: string | null; roles: { name: string; display_name: string } | { name: string; display_name: string }[] | null }[];
   return { items: u.filter((x) => STAFF_ROLE(one(x.roles)?.name ?? "")).map((x) => ({ id: x.id, name: `${x.first_name} ${x.last_name}`.trim(), role: one(x.roles)?.display_name ?? "", login: x.email, last_login: x.last_login_at, status: (x.status ?? "active").toLowerCase() === "active" ? "Active" : (x.status ?? "").toLowerCase() === "locked" ? "Locked" : "Inactive" })) };
 }
-export async function setUser(inst: string, id: string, input: unknown, actor?: string) {
+export async function setUser(inst: string, id: string, input: unknown, actor?: string, actorRole?: string) {
   const { active } = z.object({ active: z.boolean() }).strict().parse(input); if (!active && actor === id) throw new HttpError(409, "You can't deactivate your own account.");
   const t = check(await supabaseAdmin.from("user_profiles").select("id, roles:role_id(name)").eq("id", id).eq("institution_id", inst).maybeSingle()) as unknown as { id: string; roles: { name: string } | { name: string }[] | null } | null; if (!t) throw new HttpError(404, "Not found.");
   if (!STAFF_ROLE(one(t.roles)?.name ?? "")) throw new HttpError(403, "That account isn't a school user.");
+  if (!mayManage(actorRole ?? "", one(t.roles)?.name ?? "")) throw new HttpError(403, "You can't change this account. Ask the School Admin.");
   check(await supabaseAdmin.from("user_profiles").update({ status: active ? "active" : "suspended" }).eq("id", id).eq("institution_id", inst).select("id"));
   await supabaseAdmin.from("audit_logs").insert({ actor_id: actor ?? null, action: active ? "ACTIVATE_USER" : "DEACTIVATE_USER", entity_name: "user", entity_id: id, institution_id: inst }); return { ok: true };
 }

@@ -144,15 +144,16 @@ type Who = { first_name: string; last_name: string; designation: string | null; 
 export async function listLeaves(inst: string) {
   const [s, st, ro] = await Promise.all([
     supabaseAdmin.from("student_leaves").select("id, code, student_id, leave_type, from_date, to_date, days, applied_on, status").eq("institution_id", inst).order("applied_on", { ascending: false }).limit(2000),
-    supabaseAdmin.from("leave_requests").select("id, leave_type, from_date, to_date, days, created_at, status, who:profile_id(first_name, last_name, designation, roles:role_id(display_name))").eq("institution_id", inst).order("created_at", { ascending: false }).limit(2000),
+    supabaseAdmin.from("leave_requests").select("id, code, profile_id, leave_type, from_date, to_date, days, reason, created_at, status, who:profile_id(first_name, last_name, designation, roles:role_id(display_name))").eq("institution_id", inst).order("created_at", { ascending: false }).limit(2000),
     roster(inst),
   ]);
   const kids = new Map(ro.items.map((r) => [r.id, r]));
+  const dep = new Map(((check(await supabaseAdmin.from("hr_staff").select("profile_id, department").eq("institution_id", inst).limit(5000)) ?? []) as { profile_id: string; department: string }[]).map((x) => [x.profile_id, x.department]));
   type SL = { id: string; code: string; student_id: string; leave_type: string; from_date: string; to_date: string; days: number; applied_on: string; status: string };
-  type TL = { id: string; leave_type: string; from_date: string; to_date: string; days: number; created_at: string; status: string; who: Who | Who[] | null };
+  type TL = { id: string; code: string | null; profile_id: string; reason: string | null; leave_type: string; from_date: string; to_date: string; days: number; created_at: string; status: string; who: Who | Who[] | null };
   return {
     students: (check(s) as unknown as SL[]).map((r) => ({ id: r.id, ref: r.code, who: "Student" as const, name: kids.get(r.student_id)?.name ?? "", detail: kids.get(r.student_id)?.class_label ?? "", leave_type: r.leave_type, from_date: r.from_date, to_date: r.to_date, days: r.days, applied_on: r.applied_on, waiting_hours: 0, status: r.status })),
-    staff: (check(st) as unknown as TL[]).map((r) => { const w = one(r.who); return { id: r.id, ref: `LV-${r.id.slice(0, 4).toUpperCase()}`, who: "Staff" as const, name: w ? `${w.first_name} ${w.last_name}`.trim() : "", detail: w?.designation || one(w?.roles ?? null)?.display_name || "Staff", leave_type: `${r.leave_type} leave`, from_date: r.from_date, to_date: r.to_date, days: Number(r.days), applied_on: r.created_at.slice(0, 10), waiting_hours: Math.max(0, Math.round((Date.now() - Date.parse(r.created_at)) / 3600000)), status: r.status }; }),
+    staff: (check(st) as unknown as TL[]).map((r) => { const w = one(r.who); return { id: r.id, ref: r.code || `LV-${r.id.slice(0, 4).toUpperCase()}`, department: dep.get(r.profile_id) ?? "", reason: r.reason ?? "", who: "Staff" as const, name: w ? `${w.first_name} ${w.last_name}`.trim() : "", detail: w?.designation || one(w?.roles ?? null)?.display_name || "Staff", leave_type: `${r.leave_type} leave`, from_date: r.from_date, to_date: r.to_date, days: Number(r.days), applied_on: r.created_at.slice(0, 10), waiting_hours: Math.max(0, Math.round((Date.now() - Date.parse(r.created_at)) / 3600000)), status: r.status }; }),
     students_list: ro.items.filter((r) => r.status === "Enrolled").map((r) => ({ id: r.id, name: r.name, class_label: r.class_label })),
   };
 }
