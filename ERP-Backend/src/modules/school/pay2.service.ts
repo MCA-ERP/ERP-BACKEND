@@ -2,6 +2,7 @@ import { z } from "zod";
 import { supabaseAdmin } from "../../../db/client";
 import { check } from "../../lib/db";
 import { HttpError } from "../../lib/http-error";
+import { newOr } from "./tr-columns";
 import { attendanceCalc, statutory, structures } from "./pay.service";
 
 /** Payroll, part 2: approval, payslips, salary payments, reports, settings, bank and statutory files; transport vehicles. */
@@ -158,8 +159,10 @@ export async function staffBank(inst: string, id: string) {
 
 // ═════════════ transport: vehicles ═════════════
 export async function vehicles(inst: string) {
-  const [v, d] = await Promise.all([supabaseAdmin.from("tr_vehicles").select("id, reg_no, vtype, seats, route, fitness_until, gps, status").eq("institution_id", inst).order("reg_no"), supabaseAdmin.from("tr_vehicle_docs").select("id, vehicle_id, doc_type, file_name, valid_until").eq("institution_id", inst).order("valid_until")]);
-  const now = today(); const D = check(d) as { id: string; vehicle_id: string; doc_type: string; file_name: string; valid_until: string | null }[]; const V = check(v) as { id: string; reg_no: string; vtype: string; seats: number; route: string; fitness_until: string | null; gps: string; status: string }[];
+  type Veh = { id: string; reg_no: string; vtype: string; seats: number; route: string; fitness_until: string | null; gps: string; status: string; fleet_name?: string; make_model?: string; model_year?: number | null };
+  const base = "id, reg_no, vtype, seats, route, fitness_until, gps, status";
+  const [v, d] = await Promise.all([newOr<Veh>(() => supabaseAdmin.from("tr_vehicles").select(base + ", fleet_name, make_model, model_year").eq("institution_id", inst).order("reg_no"), () => supabaseAdmin.from("tr_vehicles").select(base).eq("institution_id", inst).order("reg_no")), supabaseAdmin.from("tr_vehicle_docs").select("id, vehicle_id, doc_type, file_name, valid_until").eq("institution_id", inst).order("valid_until")]);
+  const now = today(); const D = check(d) as { id: string; vehicle_id: string; doc_type: string; file_name: string; valid_until: string | null }[]; const V = v.rows;
   const soon = new Date(Date.parse(now) + 30 * 86400000).toISOString().slice(0, 10); const st = (x: string | null) => (x && x < now ? "Expired" : x && x <= soon ? "Expiring soon" : "Valid");
   return { routes: [...new Set(V.map((x) => x.route).filter(Boolean))], items: V.map((x) => ({ ...x, fitness: x.fitness_until ? st(x.fitness_until) : "—" })), docs: D.map((x) => ({ ...x, vehicle: V.find((y) => y.id === x.vehicle_id)?.reg_no ?? "", state: st(x.valid_until) })) };
 }

@@ -35,7 +35,10 @@ export async function decideExit(inst: string, id: string, input: unknown) {
   if (!x) throw new HttpError(404, "Not found."); if (x.status !== "Pending") throw new HttpError(409, "That was already decided.");
   check(await supabaseAdmin.from("hr_exits").update({ status }).eq("id", id).eq("institution_id", inst).select("id"));
   if (status === "Approved") {
-    const s = (await staffMap(inst)).get(x.staff_id); const drives = /driver|bus|attendant/i.test(s?.designation ?? "");
+    const s = (await staffMap(inst)).get(x.staff_id);
+    // transport has to clear anyone whose job is on the buses, or whose record is linked to a driver or attendant
+    const linked = await Promise.all((["tr_drivers", "tr_attendants"] as const).map((t) => supabaseAdmin.from(t).select("id").eq("institution_id", inst).eq("staff_id", x.staff_id).limit(1)));
+    const drives = /driver|bus|attendant|transport/i.test(s?.designation ?? "") || linked.some((r) => !!r.data?.length);
     check(await supabaseAdmin.from("hr_clearance").upsert(DEPTS.map((dept) => ({ exit_id: id, dept, state: dept === "Transport" && !drives ? "n/a" : "Pending" })), { onConflict: "exit_id,dept" }).select("exit_id"));
   }
   return { ok: true };

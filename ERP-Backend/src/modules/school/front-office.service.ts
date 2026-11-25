@@ -3,6 +3,7 @@ import { supabaseAdmin } from "../../../db/client";
 import { check } from "../../lib/db";
 import { createOffer } from "./admission-extra.service";
 import { HttpError } from "../../lib/http-error";
+import { aadhaarOk, hideAadhaar } from "../../lib/identity";
 
 /**
  * The front desk of a school: enquiries, visitors, appointments, calls and post. One small config per register keeps the
@@ -102,7 +103,7 @@ const REGISTERS: Record<string, Reg> = {
     select: "id, code, child, class_sought, parent_name, mobile, source, details, enquiry_id, applied_on, status, level, level_since, admission_no, created_at",
     order: ["applied_on", "created_at"],
     filters: ["status", "source"],
-    create: z.object({ child: txt(150).min(1, "Enter the child's name."), class_sought: txt(30).min(1), parent_name: txt(150).min(1, "Enter the parent's name."), mobile: opt(txt(30)), source: txt(40).min(1), details: z.record(z.string(), z.unknown()).optional(), applied_on: date.optional() }).strict(),
+    create: z.object({ child: txt(150).min(1, "Enter the child's name."), class_sought: txt(30).min(1), parent_name: txt(150).min(1, "Enter the parent's name."), mobile: opt(txt(30)), source: txt(40).min(1), details: z.record(z.string(), z.unknown()).refine((d) => aadhaarOk(d.aadhaar), "Aadhaar has 12 digits.").optional().transform(hideAadhaar), applied_on: date.optional() }).strict(),
     patch: z.object({ status: z.enum(["Under review", "Approved", "Fee paid", "Registered", "Allocated", "Returned", "Rejected", "Waitlisted"]) }).partial().strict(),
   },
   "adm-documents": {
@@ -154,8 +155,10 @@ const reg = (name: string): Reg => {
 };
 
 const staffName = (s: unknown) => { const v = Array.isArray(s) ? s[0] : s; const o = v as { first_name?: string; last_name?: string } | null; return o ? `${o.first_name ?? ""} ${o.last_name ?? ""}`.trim() : null; };
-const shape = (_name: string, row: Record<string, unknown>) => {
-  let out = row;
+/** An application as it leaves the server. */
+const appRow = <T>(row: T): T => { const r = row as { details?: Record<string, unknown> | null } | null; return r?.details ? ({ ...r, details: hideAadhaar(r.details) } as T) : row; };
+const shape = (name: string, row: Record<string, unknown>) => {
+  let out = name === "adm-applications" ? appRow(row) : row;
   if ("staff" in out) out = { ...out, assigned_name: staffName(out.staff), staff: undefined };
   if ("app" in out) { const a = Array.isArray(out.app) ? out.app[0] : out.app; out = { ...out, app: a ?? null }; }
   return out;
@@ -244,7 +247,7 @@ export async function convertEnquiry(inst: string, id: string, actor?: string) {
   const details = Object.fromEntries(Object.entries({ dob: e.dob, gender: e.gender, email: e.email, notes: e.notes }).filter(([, v]) => v));
   const app = check(await supabaseAdmin.from("adm_applications").insert({ institution_id: inst, child: e.child, class_sought: e.class_sought, parent_name: e.parent_name, mobile: e.mobile, source: e.source, details, enquiry_id: id, created_by: actor ?? null }).select(REGISTERS["adm-applications"].select).single()) as unknown as Record<string, unknown>;
   check(await supabaseAdmin.from("adm_enquiries").update({ status: "Converted" }).eq("id", id).eq("institution_id", inst).select("id"));
-  return app;
+  return appRow(app);
 }
 
 // ═════════════ help desk categories and reply times ═════════════
@@ -317,7 +320,7 @@ export async function generateAdmissionNumber(inst: string, id: string) {
   const used = check(await supabaseAdmin.from("adm_applications").select("admission_no").eq("institution_id", inst).not("admission_no", "is", null)) as { admission_no: string }[];
   const next = Math.max(1000, ...used.map((u) => Number(u.admission_no.split("/").pop()) || 0)) + 1;
   const no = `${(school?.code ?? "ADM").slice(0, 6)}/${new Date().getFullYear() + 1}/${next}`;
-  return check(await supabaseAdmin.from("adm_applications").update({ admission_no: no, status: "Registered" }).eq("id", id).eq("institution_id", inst).select(REGISTERS["adm-applications"].select).single());
+  return appRow(check(await supabaseAdmin.from("adm_applications").update({ admission_no: no, status: "Registered" }).eq("id", id).eq("institution_id", inst).select(REGISTERS["adm-applications"].select).single()));
 }
 
 export async function approvalLevels(inst: string) {
@@ -344,7 +347,7 @@ export async function advance(inst: string, id: string, body: unknown, role?: st
   }
   const row = check(await supabaseAdmin.from("adm_applications").update(update).eq("id", id).eq("institution_id", inst).select(REGISTERS["adm-applications"].select).single());
   if (update.status === "Approved") await createOffer(inst, id);
-  return row;
+  return appRow(row);
 }
 
 // ═════════════ entrance marks ═════════════
@@ -402,7 +405,7 @@ export async function allocate(inst: string, id: string, body: unknown) {
     await supabaseAdmin.from("students").delete().eq("id", student.id).eq("institution_id", inst);
     throw err;
   }
-  return check(await supabaseAdmin.from("adm_applications").update({ status: "Allocated" }).eq("id", id).eq("institution_id", inst).select(REGISTERS["adm-applications"].select).single());
+  return appRow(check(await supabaseAdmin.from("adm_applications").update({ status: "Allocated" }).eq("id", id).eq("institution_id", inst).select(REGISTERS["adm-applications"].select).single()));
 }
 
 /** The application form fee for a class, from the Admission Fee Setup. */

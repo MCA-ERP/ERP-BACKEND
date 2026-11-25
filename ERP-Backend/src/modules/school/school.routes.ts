@@ -664,11 +664,19 @@ schoolRouter.get("/pay/esi-file", hrDesk, h((req, _res, inst) => pay2.esiFile(in
 schoolRouter.get("/pay/pt-tds", hrDesk, h((req, _res, inst) => pay2.ptTds(inst, String(req.query.month ?? ""))));
 schoolRouter.get("/pay/bank/:id", hrDesk, h((req, _res, inst) => pay2.staffBank(inst, uuid(req))));
 schoolRouter.put("/pay/bank/:id", hrDesk, notOwn((r) => r.params.id), notSenior(byParam), h((req, _res, inst) => pay2.setBank(inst, uuid(req), req.body)));
+// Transport: the school's leaders, and the Transport portal for what its screens use here. The portal's other saves go
+// through /transport, which checks verification, documents and seats; settings and maintenance stay with the leaders.
+const trDesk = requireRoles("InstitutionAdmin", "Principal", "VicePrincipal", "TransportManager");
+/** Here the Transport Manager may only switch a vehicle, driver or attendant on or off. */
+const statusOnly = (req: Request, res: Response, next: NextFunction) => {
+  if (req.user?.role !== "TransportManager" || Object.keys(req.body ?? {}).every((k) => k === "status")) return next();
+  res.status(403).json({ error: "Make this change in the Transport portal, which checks documents and verification first." });
+};
 schoolRouter.get("/tr/vehicles", adminOnly, h((req, _res, inst) => pay2.vehicles(inst)));
 schoolRouter.post("/tr/vehicles", adminOnly, h(async (req, res, inst) => { res.status(201); return pay2.addVehicle(inst, req.body); }));
-schoolRouter.patch("/tr/vehicles/:id", adminOnly, h((req, _res, inst) => pay2.setVehicle(inst, uuid(req), req.body)));
+schoolRouter.patch("/tr/vehicles/:id", trDesk, statusOnly, h((req, _res, inst) => pay2.setVehicle(inst, uuid(req), req.body)));
 schoolRouter.post("/tr/vehicle-docs", adminOnly, h(async (req, res, inst) => { res.status(201); return pay2.addVehicleDoc(inst, req.body); }));
-schoolRouter.get("/tr/routes", adminOnly, h((req, _res, inst) => tr.routes(inst)));
+schoolRouter.get("/tr/routes", trDesk, h((req, _res, inst) => tr.routes(inst)));
 schoolRouter.post("/tr/routes", adminOnly, h(async (req, res, inst) => { res.status(201); return tr.addRoute(inst, req.body); }));
 schoolRouter.patch("/tr/routes/:id", adminOnly, h((req, _res, inst) => tr.setRoute(inst, uuid(req), req.body)));
 schoolRouter.get("/tr/routes/:id", adminOnly, h((req, _res, inst) => tr.routeDetail(inst, uuid(req))));
@@ -677,10 +685,10 @@ schoolRouter.post("/tr/stops", adminOnly, h(async (req, res, inst) => { res.stat
 schoolRouter.patch("/tr/stops/:id", adminOnly, h((req, _res, inst) => tr.setStop(inst, uuid(req), req.body)));
 schoolRouter.get("/tr/drivers", adminOnly, h((req, _res, inst) => tr.drivers(inst)));
 schoolRouter.post("/tr/drivers", adminOnly, h(async (req, res, inst) => { res.status(201); return tr.addDriver(inst, req.body); }));
-schoolRouter.patch("/tr/drivers/:id", adminOnly, h((req, _res, inst) => tr.setDriver(inst, uuid(req), req.body)));
+schoolRouter.patch("/tr/drivers/:id", trDesk, statusOnly, h((req, _res, inst) => tr.setDriver(inst, uuid(req), req.body)));
 schoolRouter.get("/tr/attendants", adminOnly, h((req, _res, inst) => tr.attendants(inst)));
 schoolRouter.post("/tr/attendants", adminOnly, h(async (req, res, inst) => { res.status(201); return tr.addAttendant(inst, req.body); }));
-schoolRouter.patch("/tr/attendants/:id", adminOnly, h((req, _res, inst) => tr.setAttendant(inst, uuid(req), req.body)));
+schoolRouter.patch("/tr/attendants/:id", trDesk, statusOnly, h((req, _res, inst) => tr.setAttendant(inst, uuid(req), req.body)));
 schoolRouter.get("/tr/allocations", adminOnly, h((req, _res, inst) => tr.allocations(inst)));
 schoolRouter.post("/tr/allocations", adminOnly, h((req, _res, inst) => tr.assign(inst, req.body)));
 schoolRouter.patch("/tr/allocations/:id", adminOnly, h((req, _res, inst) => tr.changeAllocation(inst, uuid(req), req.body)));
@@ -688,11 +696,11 @@ schoolRouter.get("/tr/fees", adminOnly, h((req, _res, inst) => tr.fees(inst)));
 schoolRouter.get("/tr/trips", adminOnly, h((req, _res, inst) => tr2.trips(inst)));
 schoolRouter.get("/tr/live", adminOnly, h((req, _res, inst) => tr2.live(inst)));
 schoolRouter.get("/tr/driver-trip/:id", adminOnly, h((req, _res, inst) => tr2.driverTrip(inst, uuid(req))));
-schoolRouter.post("/tr/trips/start/:id", adminOnly, h(async (req, res, inst) => { res.status(201); return tr2.startTrip(inst, uuid(req)); }));
-schoolRouter.post("/tr/trips/:id/arrive", adminOnly, h((req, _res, inst) => tr2.arrive(inst, uuid(req), req.body)));
-schoolRouter.get("/tr/roster/:id", adminOnly, h((req, _res, inst) => tr2.busRoster(inst, uuid(req), String(req.query.type ?? ""))));
-schoolRouter.post("/tr/boardings", adminOnly, h((req, _res, inst) => tr2.markBoarding(inst, req.body)));
-schoolRouter.get("/tr/missed", adminOnly, h((req, _res, inst) => tr2.missed(inst)));
+schoolRouter.post("/tr/trips/start/:id", trDesk, h(async (req, res, inst) => { res.status(201); return tr2.startTrip(inst, uuid(req)); }));
+schoolRouter.post("/tr/trips/:id/arrive", trDesk, h((req, _res, inst) => tr2.arrive(inst, uuid(req), req.body)));
+schoolRouter.get("/tr/roster/:id", trDesk, h((req, _res, inst) => tr2.busRoster(inst, uuid(req), String(req.query.type ?? ""))));
+schoolRouter.post("/tr/boardings", trDesk, h((req, _res, inst) => tr2.markBoarding(inst, req.body)));
+schoolRouter.get("/tr/missed", trDesk, h((req, _res, inst) => tr2.missed(inst)));
 schoolRouter.get("/tr/maintenance", adminOnly, h((req, _res, inst) => tr2.maintenance(inst, req.query.type ? String(req.query.type ?? "") : undefined)));
 schoolRouter.post("/tr/maintenance", adminOnly, h(async (req, res, inst) => { res.status(201); return tr2.addMaintenance(inst, req.body); }));
 schoolRouter.patch("/tr/maintenance/:id", adminOnly, h((req, _res, inst) => tr2.setMaintenance(inst, uuid(req), req.body)));

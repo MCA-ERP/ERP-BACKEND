@@ -5,6 +5,8 @@ import { HttpError } from "../../lib/http-error";
 import { roster } from "./student-mgmt.service";
 import { everyone } from "./fees2.service";
 import { feeSettings } from "./fees.service";
+import { directory } from "./hr.service";
+import { newOr, saved } from "./tr-columns";
 
 /** Transport: routes, stops, drivers, attendants, student allocation and fees. */
 const uid = z.string().uuid();
@@ -55,33 +57,56 @@ export async function routeDetail(inst: string, id: string) {
 }
 
 // ═════════════ drivers and attendants ═════════════
+type Named = { reg_no: string } | { reg_no: string }[] | null;
+/** The school's active staff, to link a driver or attendant to their HR record. */
+async function staffList(inst: string) { return (await directory(inst)).items.filter((s) => s.status === "Active").map((s) => ({ id: s.id, name: s.name, emp_code: s.emp_code, designation: s.designation })); }
+async function checkStaff(inst: string, id: string, table: "tr_drivers" | "tr_attendants", except?: string) {
+  if (!(await staffList(inst)).some((s) => s.id === id)) throw new HttpError(404, "Staff member not found.");
+  const used = await supabaseAdmin.from(table).select("id").eq("institution_id", inst).eq("staff_id", id);
+  if (((used.data ?? []) as { id: string }[]).some((x) => x.id !== except)) throw new HttpError(409, "That staff record is already linked.");
+}
 export async function drivers(inst: string) {
-  const [d, v] = await Promise.all([supabaseAdmin.from("tr_drivers").select("id, name, licence_no, licence_until, vehicle_id, mobile, police, status, vh:vehicle_id(reg_no)").eq("institution_id", inst).order("name"), supabaseAdmin.from("tr_vehicles").select("id, reg_no").eq("institution_id", inst).order("reg_no")]);
-  return { vehicles: check(v) as { id: string; reg_no: string }[], items: (check(d) as unknown as { id: string; name: string; licence_no: string; licence_until: string | null; vehicle_id: string | null; mobile: string | null; police: string; status: string; vh: { reg_no: string } | { reg_no: string }[] | null }[]).map((x) => ({ id: x.id, name: x.name, licence_no: x.licence_no, licence_until: x.licence_until, vehicle_id: x.vehicle_id, vehicle: one(x.vh)?.reg_no ?? "Spare", mobile: x.mobile ?? "", police: x.police, status: x.status })) };
+  type Row = { id: string; name: string; licence_no: string; licence_until: string | null; vehicle_id: string | null; mobile: string | null; police: string; status: string; staff_id?: string | null; vh: Named };
+  const base = "id, name, licence_no, licence_until, vehicle_id, mobile, police, status, vh:vehicle_id(reg_no)";
+  const [d, v, staff] = await Promise.all([
+    newOr<Row>(() => supabaseAdmin.from("tr_drivers").select(base + ", staff_id").eq("institution_id", inst).order("name"), () => supabaseAdmin.from("tr_drivers").select(base).eq("institution_id", inst).order("name")),
+    supabaseAdmin.from("tr_vehicles").select("id, reg_no").eq("institution_id", inst).order("reg_no"), staffList(inst)]);
+  return { staff, linkable: d.upgraded, vehicles: check(v) as { id: string; reg_no: string }[], items: d.rows.map((x) => ({ id: x.id, name: x.name, licence_no: x.licence_no, licence_until: x.licence_until, vehicle_id: x.vehicle_id, vehicle: one(x.vh)?.reg_no ?? "Spare", mobile: x.mobile ?? "", police: x.police, status: x.status, staff_id: x.staff_id ?? null, staff: staff.find((s) => s.id === x.staff_id)?.name ?? "" })) };
 }
 export async function addDriver(inst: string, input: unknown) {
-  const i = z.object({ name: z.string().trim().min(2, "Enter the driver.").max(120), licence_no: z.string().trim().toUpperCase().min(5, "Enter the licence number.").max(30), licence_until: date.nullable().optional(), vehicle_id: uid.nullable().optional(), mobile: z.string().trim().max(30).optional(), police: z.enum(["Verified", "Pending"]) }).strict().parse(input);
+  const i = z.object({ name: z.string().trim().min(2, "Enter the driver.").max(120), licence_no: z.string().trim().toUpperCase().min(5, "Enter the licence number.").max(30), licence_until: date.nullable().optional(), vehicle_id: uid.nullable().optional(), mobile: z.string().trim().max(30).optional(), police: z.enum(["Verified", "Pending"]), staff_id: uid.nullable().optional() }).strict().parse(input);
   if (i.vehicle_id) await own("tr_vehicles", inst, i.vehicle_id, "Vehicle");
+  if (i.staff_id) await checkStaff(inst, i.staff_id, "tr_drivers");
   const dup = check(await supabaseAdmin.from("tr_drivers").select("id").eq("institution_id", inst).eq("licence_no", i.licence_no)) as unknown[]; if (dup.length) throw new HttpError(409, "That licence is already registered.");
-  return check(await supabaseAdmin.from("tr_drivers").insert({ institution_id: inst, ...i, licence_until: i.licence_until ?? null, vehicle_id: i.vehicle_id ?? null, mobile: i.mobile || null }).select("id").single());
+  const { staff_id, ...row } = i;
+  return saved<{ id: string }>(await supabaseAdmin.from("tr_drivers").insert({ institution_id: inst, ...row, ...(staff_id ? { staff_id } : {}), licence_until: i.licence_until ?? null, vehicle_id: i.vehicle_id ?? null, mobile: i.mobile || null }).select("id").single());
 }
 export async function setDriver(inst: string, id: string, input: unknown) {
-  const i = z.object({ vehicle_id: uid.nullable().optional(), police: z.enum(["Verified", "Pending"]).optional(), status: z.enum(["Active", "Inactive"]).optional() }).strict().parse(input);
+  const i = z.object({ vehicle_id: uid.nullable().optional(), police: z.enum(["Verified", "Pending"]).optional(), status: z.enum(["Active", "Inactive"]).optional(), licence_until: date.nullable().optional(), staff_id: uid.nullable().optional() }).strict().parse(input);
   if (i.vehicle_id) await own("tr_vehicles", inst, i.vehicle_id, "Vehicle");
-  const r = check(await supabaseAdmin.from("tr_drivers").update(i).eq("id", id).eq("institution_id", inst).select("id")) as unknown[]; if (!r.length) throw new HttpError(404, "Not found."); return { ok: true };
+  if (i.staff_id) await checkStaff(inst, i.staff_id, "tr_drivers", id);
+  const r = saved<unknown[]>(await supabaseAdmin.from("tr_drivers").update(i).eq("id", id).eq("institution_id", inst).select("id")); if (!r.length) throw new HttpError(404, "Not found."); return { ok: true };
 }
 export async function attendants(inst: string) {
-  const [a, r, v] = await Promise.all([supabaseAdmin.from("tr_attendants").select("id, name, route_id, vehicle_id, mobile, shift, status, rt:route_id(name), vh:vehicle_id(reg_no)").eq("institution_id", inst).order("name"), routes(inst), supabaseAdmin.from("tr_vehicles").select("id, reg_no").eq("institution_id", inst).order("reg_no")]);
-  return { routes: r.items.map((x) => ({ id: x.id, name: x.name })), vehicles: check(v) as { id: string; reg_no: string }[], items: (check(a) as unknown as { id: string; name: string; mobile: string | null; shift: string; status: string; rt: { name: string } | { name: string }[] | null; vh: { reg_no: string } | { reg_no: string }[] | null }[]).map((x) => ({ id: x.id, name: x.name, route: one(x.rt)?.name ?? "—", vehicle: one(x.vh)?.reg_no ?? "—", mobile: x.mobile ?? "", shift: x.shift, status: x.status })) };
+  type Row = { id: string; name: string; route_id: string | null; vehicle_id: string | null; mobile: string | null; shift: string; status: string; staff_id?: string | null; police?: string; rt: { name: string } | { name: string }[] | null; vh: Named };
+  const base = "id, name, route_id, vehicle_id, mobile, shift, status, rt:route_id(name), vh:vehicle_id(reg_no)";
+  const [a, r, v, staff] = await Promise.all([
+    newOr<Row>(() => supabaseAdmin.from("tr_attendants").select(base + ", staff_id, police").eq("institution_id", inst).order("name"), () => supabaseAdmin.from("tr_attendants").select(base).eq("institution_id", inst).order("name")),
+    routes(inst), supabaseAdmin.from("tr_vehicles").select("id, reg_no").eq("institution_id", inst).order("reg_no"), staffList(inst)]);
+  return { staff, linkable: a.upgraded, routes: r.items.map((x) => ({ id: x.id, name: x.name })), vehicles: check(v) as { id: string; reg_no: string }[], items: a.rows.map((x) => ({ id: x.id, name: x.name, route_id: x.route_id, vehicle_id: x.vehicle_id, route: one(x.rt)?.name ?? "—", vehicle: one(x.vh)?.reg_no ?? "—", mobile: x.mobile ?? "", shift: x.shift, status: x.status, police: x.police ?? "", staff_id: x.staff_id ?? null, staff: staff.find((s) => s.id === x.staff_id)?.name ?? "" })) };
 }
 export async function addAttendant(inst: string, input: unknown) {
-  const i = z.object({ name: z.string().trim().min(2, "Enter the attendant.").max(120), route_id: uid.nullable().optional(), vehicle_id: uid.nullable().optional(), mobile: z.string().trim().max(30).optional(), shift: z.enum(["Morning + afternoon", "Morning only", "Afternoon only"]) }).strict().parse(input);
+  const i = z.object({ name: z.string().trim().min(2, "Enter the attendant.").max(120), route_id: uid.nullable().optional(), vehicle_id: uid.nullable().optional(), mobile: z.string().trim().max(30).optional(), shift: z.enum(["Morning + afternoon", "Morning only", "Afternoon only"]), staff_id: uid.nullable().optional(), police: z.enum(["Verified", "Pending"]).optional() }).strict().parse(input);
   if (i.route_id) await own("tr_routes", inst, i.route_id, "Route"); if (i.vehicle_id) await own("tr_vehicles", inst, i.vehicle_id, "Vehicle");
-  return check(await supabaseAdmin.from("tr_attendants").insert({ institution_id: inst, ...i, route_id: i.route_id ?? null, vehicle_id: i.vehicle_id ?? null, mobile: i.mobile || null }).select("id").single());
+  if (i.staff_id) await checkStaff(inst, i.staff_id, "tr_attendants");
+  const { staff_id, police, ...row } = i;
+  return saved<{ id: string }>(await supabaseAdmin.from("tr_attendants").insert({ institution_id: inst, ...row, ...(staff_id ? { staff_id } : {}), ...(police === "Verified" ? { police } : {}), route_id: i.route_id ?? null, vehicle_id: i.vehicle_id ?? null, mobile: i.mobile || null }).select("id").single());
 }
 export async function setAttendant(inst: string, id: string, input: unknown) {
-  const { status } = z.object({ status: z.enum(["Active", "Inactive"]) }).strict().parse(input);
-  const r = check(await supabaseAdmin.from("tr_attendants").update({ status }).eq("id", id).eq("institution_id", inst).select("id")) as unknown[]; if (!r.length) throw new HttpError(404, "Not found."); return { ok: true };
+  const i = z.object({ status: z.enum(["Active", "Inactive"]).optional(), police: z.enum(["Verified", "Pending"]).optional(), route_id: uid.nullable().optional(), vehicle_id: uid.nullable().optional(), staff_id: uid.nullable().optional() }).strict().parse(input);
+  if (i.route_id) await own("tr_routes", inst, i.route_id, "Route"); if (i.vehicle_id) await own("tr_vehicles", inst, i.vehicle_id, "Vehicle");
+  if (i.staff_id) await checkStaff(inst, i.staff_id, "tr_attendants", id);
+  const r = saved<unknown[]>(await supabaseAdmin.from("tr_attendants").update(i).eq("id", id).eq("institution_id", inst).select("id")); if (!r.length) throw new HttpError(404, "Not found."); return { ok: true };
 }
 
 // ═════════════ student allocation (and the bus fee on the student's fee plan) ═════════════

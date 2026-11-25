@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fs from "fs";
 import path from "path";
-import { maskPhone } from "../school/hr2.service";
+import { maskPan, maskPhone } from "../school/hr2.service";
 import { inWindow, isFieldStaff } from "../school/geo-fence.service";
 
 /** Reads that name the signed-in person (from the session) instead of the school: their own read marks. */
@@ -125,5 +125,18 @@ describe("geo-fence rules", () => {
     const service = read("../school/geo-fence.service.ts");
     expect(service).toMatch(/\.eq\("id", c\.id\)\.eq\("institution_id", inst\)/);
     expect(read("../school/school.routes.ts")).toContain('put(att + "/geo-settings", hrDesk');
+  });
+});
+
+describe("identity numbers on staff profiles", () => {
+  const service = read("../school/hr2.service.ts");
+  it("shows only the last four characters of a PAN", () => {
+    expect(maskPan("ABCDE1234F")).toBe("••••••234F");
+    expect(maskPan(null)).toBe("");
+    expect(service).toContain("pan: maskPan(h?.pan), aadhaar:");
+    expect(read("hr-portal.service.ts")).toContain("pan: maskPan(x?.pan)");
+  });
+  it("never saves a masked number over the real one", () => {
+    expect(service).toContain('!i.pan.includes("•")) row.pan');
   });
 });

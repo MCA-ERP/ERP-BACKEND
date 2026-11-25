@@ -12,6 +12,14 @@ const today = () => new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kol
 const nowHm = () => new Date().toLocaleTimeString("en-GB", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" });
 const mins = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
 const ttypeNow = () => (Number(nowHm().slice(0, 2)) >= 12 ? "Afternoon" : "Morning");
+export const tripNow = ttypeNow;
+const hhmm = (m: number) => `${String(Math.floor((((m % 1440) + 1440) % 1440) / 60)).padStart(2, "0")}:${String((((m % 1440) + 1440) % 1440) % 60).padStart(2, "0")}`;
+/** Stops in the order the bus reaches them: pickup order in the morning; in the afternoon by drop time, else the reverse. */
+export function runOrder<T extends { ord: number; drop?: string }>(list: T[], type: string): T[] {
+  const up = [...list].sort((a, b) => a.ord - b.ord);
+  if (type === "Morning") return up;
+  return up.every((s) => s.drop) ? up.sort((a, b) => a.drop!.localeCompare(b.drop!) || b.ord - a.ord) : up.reverse();
+}
 const one = <T>(v: T | T[] | null | undefined): T | null => (Array.isArray(v) ? (v[0] ?? null) : (v ?? null));
 
 async function tell(inst: string, studentIds: string[], subject: string, body: string) {
@@ -32,8 +40,8 @@ export async function trips(inst: string) {
 export async function live(inst: string) {
   const type = ttypeNow(); const [r, st, tr, dr, vh] = await Promise.all([routes(inst), stops(inst), supabaseAdmin.from("tr_trips").select("route_id, ttype, status, arrived, started_at").eq("institution_id", inst).eq("trip_on", today()).eq("ttype", type), supabaseAdmin.from("tr_drivers").select("name, vehicle_id").eq("institution_id", inst), supabaseAdmin.from("tr_vehicles").select("id, reg_no, route, status").eq("institution_id", inst)]);
   const T = check(tr) as { route_id: string; status: string; arrived: string[]; started_at: string | null }[]; const D = check(dr) as { name: string; vehicle_id: string | null }[]; const V = check(vh) as { id: string; reg_no: string; route: string; status: string }[];
-  const cards = r.items.filter((x) => x.status === "Active").map((x) => { const t = T.find((y) => y.route_id === x.id); const v = V.find((y) => y.route === x.name); const ss = st.items.filter((y) => y.route_id === x.id); const done = t?.arrived.length ?? 0; const late = t?.status === "Delayed" || (t?.status === "Running" && !!x.first_pickup && !!t.started_at && mins(t.started_at) > mins(x.first_pickup) + 10);
-    return { route: x.name, vehicle: v?.reg_no ?? "—", driver: D.find((d) => d.vehicle_id === v?.id)?.name ?? "—", state: !t ? "Not started" : t.status === "Completed" ? "Completed" : late ? "Delayed" : "On time", last: done ? ss[done - 1]?.name ?? "" : "", next: ss[done]?.name ?? "", progress: ss.length ? Math.round((done / ss.length) * 100) : 0, running: t?.status === "Running" }; });
+  const cards = r.items.filter((x) => x.status === "Active").map((x) => { const t = T.find((y) => y.route_id === x.id); const v = V.find((y) => y.route === x.name); const ss = runOrder(st.items.filter((y) => y.route_id === x.id), type); const done = t?.arrived.length ?? 0; const due = type === "Morning" ? x.first_pickup : ss[0]?.drop ?? ""; const lateBy = t?.started_at && due ? mins(t.started_at) - mins(due) : 0; const late = t?.status === "Delayed" || (t?.status === "Running" && lateBy > 10);
+    return { route: x.name, vehicle: v?.reg_no ?? "—", driver: D.find((d) => d.vehicle_id === v?.id)?.name ?? "—", state: !t ? "Not started" : t.status === "Completed" ? "Completed" : late ? "Delayed" : "On time", last: done ? ss[done - 1]?.name ?? "" : "", next: ss[done]?.name ?? "", progress: ss.length ? Math.round((done / ss.length) * 100) : 0, running: t?.status === "Running", late_by: late ? Math.max(0, lateBy) : 0, started: t?.started_at?.slice(0, 5) ?? "" }; });
   return { type, on_road: cards.filter((c) => c.running).length, routes: cards.length, delayed: cards.filter((c) => c.state === "Delayed").length, maint: V.filter((v) => v.status === "In maintenance").map((v) => v.reg_no), items: cards };
 }
 export async function driverTrip(inst: string, routeId: string) {
@@ -41,7 +49,7 @@ export async function driverTrip(inst: string, routeId: string) {
   const rt = r.items.find((x) => x.id === routeId); if (!rt) throw new HttpError(404, "Route not found.");
   const type = ttypeNow(); const t = check(await supabaseAdmin.from("tr_trips").select("id, status, arrived").eq("route_id", routeId).eq("trip_on", today()).eq("ttype", type).maybeSingle()) as { id: string; status: string; arrived: string[] } | null;
   const v = await vehicleOf(inst, rt.name); const d = v ? (check(await supabaseAdmin.from("tr_drivers").select("name").eq("vehicle_id", v.id).limit(1)) as { name: string }[])[0] : null;
-  const A = check(al) as { stop_id: string | null }[]; const ss = s.items.filter((x) => x.route_id === routeId).map((x) => ({ id: x.id, name: x.name, due: type === "Morning" ? x.pickup : x.drop, students: A.filter((y) => y.stop_id === x.id).length, arrived: !!t?.arrived.includes(x.id) }));
+  const A = check(al) as { stop_id: string | null }[]; const ss = runOrder(s.items.filter((x) => x.route_id === routeId), type).map((x) => ({ id: x.id, name: x.name, due: type === "Morning" ? x.pickup : x.drop, students: A.filter((y) => y.stop_id === x.id).length, arrived: !!t?.arrived.includes(x.id) }));
   const alerts = t ? (check(await supabaseAdmin.from("tr_alerts").select("id, stop_name, families, at").eq("trip_id", t.id).order("at", { ascending: false })) as { id: string; stop_name: string; families: number; at: string }[]) : [];
   return { routes: r.items.filter((x) => x.status === "Active").map((x) => ({ id: x.id, name: x.name })), route: rt.name, type, driver: d?.name ?? "", vehicle: v?.reg_no ?? "", trip: t ? { id: t.id, status: t.status } : null, school_due: rt.at_school, stops: ss, alerts };
 }
@@ -56,10 +64,33 @@ export async function arrive(inst: string, tripId: string, input: unknown) {
   if (t.status !== "Running") throw new HttpError(409, "That trip is over.");
   const stop = check(await supabaseAdmin.from("tr_stops").select("id, name").eq("id", stop_id).eq("route_id", t.route_id).maybeSingle()) as { id: string; name: string } | null; if (!stop) throw new HttpError(400, "That stop is not on this route.");
   if (t.arrived.includes(stop_id)) throw new HttpError(409, "Already marked arrived.");
-  const kids = (check(await supabaseAdmin.from("tr_allocations").select("student_id").eq("stop_id", stop_id)) as { student_id: string }[]).map((x) => x.student_id);
+  const kids = (check(await supabaseAdmin.from("tr_allocations").select("student_id").eq("institution_id", inst).eq("stop_id", stop_id)) as { student_id: string }[]).map((x) => x.student_id);
   const sent = await tell(inst, kids, "Bus alert", t.ttype === "Morning" ? `The school bus has reached ${stop.name}.` : `The school bus has reached ${stop.name} to drop your child.`);
   check(await supabaseAdmin.from("tr_alerts").insert({ institution_id: inst, trip_id: tripId, stop_id, stop_name: stop.name, families: sent }).select("id"));
-  const arrived = [...t.arrived, stop_id]; const total = (check(await supabaseAdmin.from("tr_stops").select("id").eq("route_id", t.route_id)) as unknown[]).length;
+  const arrived = [...t.arrived, stop_id];
+  const all = (await stops(inst)).items.filter((x) => x.route_id === t.route_id); const total = all.length;
+  // the families at the next stop learn when to expect the bus
+  const order = runOrder(all, t.ttype); const next = order.slice(order.findIndex((x) => x.id === stop_id) + 1).find((x) => !arrived.includes(x.id));
+  // What Parents See: both alerts are on until the school turns them off
+  const sh = await supabaseAdmin.from("tr_settings").select("alert_5min, alert_late").eq("institution_id", inst).maybeSingle();
+  const share = (sh.data ?? { alert_5min: true, alert_late: true }) as { alert_5min: boolean; alert_late: boolean };
+  const dueHere = order.find((x) => x.id === stop_id); const planned = dueHere ? (t.ttype === "Morning" ? dueHere.pickup : dueHere.drop) : "";
+  const behind = planned ? mins(nowHm()) - mins(planned) : 0;
+  if (share.alert_late && next && behind >= 10) {
+    // told once a trip: the delay is written on the trip first, so a second stop does not send it again
+    const first = await supabaseAdmin.from("tr_trips").update({ delay_min: Math.min(300, behind) }).eq("id", tripId).eq("institution_id", inst).is("delay_min", null).select("id");
+    if (first.data?.length) {
+      const rest = order.slice(order.findIndex((x) => x.id === stop_id) + 1).map((x) => x.id);
+      const later = (check(await supabaseAdmin.from("tr_allocations").select("student_id").eq("institution_id", inst).in("stop_id", rest)) as { student_id: string }[]).map((x) => x.student_id);
+      await tell(inst, later, "Bus delay", `The school bus is running about ${behind} minutes late.`);
+    }
+  }
+  if (next && share.alert_5min) {
+    const here = order.find((x) => x.id === stop_id); const due = t.ttype === "Morning" ? next.pickup : next.drop; const was = t.ttype === "Morning" ? here?.pickup : here?.drop;
+    const eta = due ? hhmm(mins(due) + (was ? Math.max(0, mins(nowHm()) - mins(was)) : 0)) : "";
+    const waiting = (check(await supabaseAdmin.from("tr_allocations").select("student_id").eq("institution_id", inst).eq("stop_id", next.id)) as { student_id: string }[]).map((x) => x.student_id);
+    await tell(inst, waiting, "Bus alert", `The school bus is next at ${next.name}${eta ? `, due about ${eta}` : ""}.`);
+  }
   const row: Record<string, unknown> = { arrived }; if (arrived.length >= total) { const rt = check(await supabaseAdmin.from("tr_routes").select("at_school").eq("id", t.route_id).single()) as { at_school: string | null }; row.ended_at = nowHm(); row.status = t.ttype === "Morning" && rt.at_school && mins(nowHm()) > mins(rt.at_school) + 10 ? "Delayed" : "Completed"; }
   check(await supabaseAdmin.from("tr_trips").update(row).eq("id", tripId).eq("institution_id", inst).select("id"));
   return { families: sent, done: arrived.length >= total };
@@ -78,14 +109,16 @@ export async function busRoster(inst: string, routeId: string, ttype: string) {
 export async function markBoarding(inst: string, input: unknown) {
   const i = z.object({ student_id: uid, ttype: z.enum(["Morning", "Afternoon"]), status: z.enum(["Boarded", "Boarded, no card", "Missing at stop", "Absent, parent told"]), note: z.string().trim().max(160).optional() }).strict().parse(input);
   const a = check(await supabaseAdmin.from("tr_allocations").select("student_id").eq("student_id", i.student_id).eq("institution_id", inst).maybeSingle()); if (!a) throw new HttpError(404, "That student is not on transport.");
-  check(await supabaseAdmin.from("tr_boardings").upsert({ trip_on: today(), ttype: i.ttype, student_id: i.student_id, institution_id: inst, status: i.status, note: i.note ?? null, at: new Date().toISOString() }, { onConflict: "trip_on,ttype,student_id" }).select("student_id"));
+  const was = check(await supabaseAdmin.from("tr_boardings").select("status").eq("institution_id", inst).eq("trip_on", today()).eq("ttype", i.ttype).eq("student_id", i.student_id).maybeSingle()) as { status: string } | null;
+  const found = !!was && ["Missing at stop", "Absent, parent told"].includes(was.status) && i.status.startsWith("Boarded");
+  check(await supabaseAdmin.from("tr_boardings").upsert({ trip_on: today(), ttype: i.ttype, student_id: i.student_id, institution_id: inst, status: i.status, note: i.note ?? (found ? `Found: boarded at ${nowHm()}` : null), at: new Date().toISOString() }, { onConflict: "trip_on,ttype,student_id" }).select("student_id"));
   if (["Missing at stop", "Absent, parent told"].includes(i.status)) await tell(inst, [i.student_id], "Bus alert", i.status === "Missing at stop" ? "Your child was not at the stop when the bus arrived. The transport desk will call you." : "Your child was marked absent on the school bus today.");
   return { ok: true };
 }
 export async function missed(inst: string) {
-  const [b, ro, al, s, r] = await Promise.all([supabaseAdmin.from("tr_boardings").select("student_id, ttype, status, note").eq("institution_id", inst).eq("trip_on", today()).in("status", ["Missing at stop", "Absent, parent told"]), roster(inst), supabaseAdmin.from("tr_allocations").select("student_id, route_id, stop_id").eq("institution_id", inst), stops(inst), routes(inst)]);
+  const [b, ro, al, s, r] = await Promise.all([supabaseAdmin.from("tr_boardings").select("student_id, ttype, status, note").eq("institution_id", inst).eq("trip_on", today()).or('status.in.("Missing at stop","Absent, parent told"),note.ilike.Found%'), roster(inst), supabaseAdmin.from("tr_allocations").select("student_id, route_id, stop_id").eq("institution_id", inst), stops(inst), routes(inst)]);
   const K = new Map(ro.items.map((x) => [x.id, x])); const A = new Map((check(al) as { student_id: string; route_id: string | null; stop_id: string | null }[]).map((x) => [x.student_id, x]));
-  return { items: (check(b) as { student_id: string; ttype: string; status: string; note: string | null }[]).map((x) => { const a = A.get(x.student_id); return { student_id: x.student_id, student: K.get(x.student_id)?.name ?? "", class_label: K.get(x.student_id)?.class_label ?? "", trip: `${r.items.find((y) => y.id === a?.route_id)?.name ?? ""} · ${x.ttype.toLowerCase()}`, stop: s.items.find((y) => y.id === a?.stop_id)?.name ?? "—", status: x.status, resolution: x.note ?? "—" }; }) };
+  return { items: (check(b) as { student_id: string; ttype: string; status: string; note: string | null }[]).map((x) => { const a = A.get(x.student_id); return { student_id: x.student_id, student: K.get(x.student_id)?.name ?? "", class_label: K.get(x.student_id)?.class_label ?? "", trip: `${r.items.find((y) => y.id === a?.route_id)?.name ?? ""} · ${x.ttype.toLowerCase()}`, stop: s.items.find((y) => y.id === a?.stop_id)?.name ?? "—", status: x.status.startsWith("Boarded") ? "Found" : x.status, resolution: x.note ?? "—" }; }) };
 }
 
 // ═════════════ maintenance ═════════════
