@@ -9,6 +9,8 @@
     "start": "node dist/src/server.js",
     "dev:prod": "tsc && node -r dotenv/config dist/src/server.js dotenv_config_path=env/.env.prod",
     "start:prod": "node -r dotenv/config dist/src/server.js dotenv_config_path=env/.env.prod",
+    "dev:uat": "tsc && node -r dotenv/config dist/src/server.js dotenv_config_path=env/.env.uat",
+    "start:uat": "node -r dotenv/config dist/src/server.js dotenv_config_path=env/.env.uat",
     "migrate": "node db/migrate.js",
     "migrate:status": "node db/migrate.js status",
     "migrate:dry": "node db/migrate.js --dry-run",
