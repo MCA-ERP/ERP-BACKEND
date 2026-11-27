@@ -56,10 +56,18 @@ export async function deliverCode(profile: { email: string; first_name: string; 
   const { sms } = await deliveryAvailable();
 
   if (sms && profile.phone && normalizePhone(profile.phone)) {
-    const tpl = (await supabaseAdmin.from("message_templates").select("provider_template_id").eq("key", "login_otp").eq("channel", "sms").single()).data as { provider_template_id: string };
     try {
-      await sendSms({ to: profile.phone, templateId: tpl.provider_template_id, variables: { platform_name: platform, otp: code } });
-      return { channel: "sms", sent_to: maskPhone(profile.phone) };
+      if (smsConfigured()) {
+        const tpl = (await supabaseAdmin.from("message_templates").select("provider_template_id").eq("key", "login_otp").eq("channel", "sms").maybeSingle()).data as { provider_template_id: string | null } | null;
+        if (tpl?.provider_template_id) {
+          await sendSms({ to: profile.phone, templateId: tpl.provider_template_id, variables: { platform_name: platform, otp: code } });
+          return { channel: "sms", sent_to: maskPhone(profile.phone) };
+        }
+      }
+      if (fast2smsConfigured()) {
+        await sendOtpFast2sms(profile.phone, code);
+        return { channel: "sms", sent_to: maskPhone(profile.phone) };
+      }
     } catch (err) {
       console.error("Sign-in code SMS failed, trying email:", err instanceof Error ? err.message : err);
     }
