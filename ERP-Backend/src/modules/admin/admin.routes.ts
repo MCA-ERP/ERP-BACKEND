@@ -53,6 +53,7 @@ const schoolBase = z.object({
   name: z.string().trim().min(2, "School name is required.").max(255),
   type: z.string().trim().min(1).max(50).optional(),
   board: nullableStr(50),
+  branch: nullableStr(150),
   city: nullableStr(100),
   state: nullableStr(100),
   contact_name: nullableStr(150),

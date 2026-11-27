@@ -65,10 +65,16 @@ async function logEvent(email: string, success: boolean, reason: string, ctx: Lo
   if (res.error) console.error("Login event not recorded:", res.error.message);
 }
 
-/** A student can type just their registration number; it maps to the account created for them. */
+/** A student can type just their registration number, and a parent their mobile number; each maps to the account made for them. */
 export async function loginEmailFor(input: string): Promise<string> {
   const id = input.trim().toLowerCase();
   if (id.includes("@")) return id;
+  // a mobile number (with or without +91 and spaces) that has a parent account
+  const digits = /^\+?[\d\s-]{10,16}$/.test(id) ? id.replace(/\D/g, "").slice(-10) : "";
+  if (digits.length === 10) {
+    const parent = `${digits}@${await getSetting<string>("accounts.parent_login_domain", "parents.myclassassist.in")}`;
+    if ((await supabaseAdmin.from("user_profiles").select("id").eq("email", parent).maybeSingle()).data) return parent;
+  }
   const domain = await getSetting<string>("accounts.student_login_domain", "students.myclassassist.in");
   return `${id}@${domain}`;
 }

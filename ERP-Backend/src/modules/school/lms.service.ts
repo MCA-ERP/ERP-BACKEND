@@ -86,7 +86,7 @@ export async function listSessions(inst: string) {
   return { items: rows.map((r) => ({ id: r.id, name: r.name, class_label: sec(r.sections), teacher: full(r.who), date: r.session_date, time: r.session_time.slice(0, 5), link: r.link, attended: r.attended_pct, status: r.status })) };
 }
 export async function addSession(inst: string, input: unknown) {
-  const i = z.object({ name: z.string().trim().min(2, "Enter the session.").max(200), section_id: uid, teacher_id: uid.nullable().optional(), session_date: iso, session_time: z.string().regex(/^\d{2}:\d{2}$/, "Choose a time."), link: z.string().trim().max(300).optional() }).strict().parse(input);
+  const i = z.object({ name: z.string().trim().min(2, "Enter the session.").max(200), section_id: uid, teacher_id: uid.nullable().optional(), session_date: iso, session_time: z.string().regex(/^\d{2}:\d{2}$/, "Choose a time."), link: z.string().trim().max(300).regex(/^(https:\/\/\S+)?$/i, "The link must start with https://").optional() }).strict().parse(input);
   await own(inst, i.section_id, null, i.teacher_id);
   return check(await supabaseAdmin.from("online_classes").insert({ institution_id: inst, name: i.name, section_id: i.section_id, teacher_id: i.teacher_id ?? null, session_date: i.session_date, session_time: i.session_time, link: i.link ?? "" }).select("id").single());
 }

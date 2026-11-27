@@ -85,7 +85,8 @@ export async function authGuard(req: Request, res: Response, next: NextFunction)
       .maybeSingle();
 
     if (!profile) {
-      if (email && bootstrapSuperAdmins().includes(email)) {
+      // the first administrator: only an email address that has been confirmed counts
+      if (email && authData.user.email_confirmed_at && bootstrapSuperAdmins().includes(email)) {
         req.user = {
           id: authUserId,
           email,
@@ -136,6 +137,12 @@ export async function authGuard(req: Request, res: Response, next: NextFunction)
       // a role can be limited to some of the modules its school has
       const limit = await getRoleModuleLimit(profile.role_id);
       if (limit) modules = modules.filter((m) => limit.includes(m));
+    }
+
+    // a temporary password (known to whoever made the account) opens nothing but the sign-in routes until it is replaced
+    if (profile.must_change_password === true && !(req.originalUrl ?? "").startsWith("/api/v1/auth/")) {
+      res.status(403).json({ error: "Set your own password before using the portal.", code: "PASSWORD_CHANGE_REQUIRED" });
+      return;
     }
 
     req.user = {

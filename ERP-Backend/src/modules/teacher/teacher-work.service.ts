@@ -268,7 +268,7 @@ export async function materials(inst: string, me: string) {
 
 const YT = /^https:\/\/(www\.)?(youtube\.com|youtu\.be)\//i;
 export async function addMaterial(inst: string, me: string, input: unknown) {
-  const i = z.object({ doc_type: z.enum(["PDF", "Document", "Video"]), title: z.string().trim().min(2, "Enter the title.").max(200), section_id: uid, chapter: z.string().trim().max(200).optional(), file_name: z.string().trim().max(150).optional(), size_label: z.string().trim().max(30).optional(), url: z.string().trim().max(300).optional(), shared: z.boolean() }).strict().parse(input);
+  const i = z.object({ doc_type: z.enum(["PDF", "Document", "Video"]), title: z.string().trim().min(2, "Enter the title.").max(200), section_id: uid, chapter: z.string().trim().max(200).optional(), file_name: z.string().trim().max(150).optional(), size_label: z.string().trim().max(30).optional(), url: z.string().trim().max(300).regex(/^(https?:\/\/\S+)?$/i, "The link must start with https://").optional(), shared: z.boolean() }).strict().parse(input);
   const s = await subjectIn(inst, me, i.section_id);
   const f = i.file_name ?? "";
   if (i.doc_type === "PDF" && !/\.pdf$/i.test(f)) throw new HttpError(400, "Choose a PDF file.");

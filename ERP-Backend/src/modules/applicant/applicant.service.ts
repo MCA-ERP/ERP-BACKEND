@@ -492,10 +492,16 @@ export async function payVerify(inst: string, profile: string, body: unknown) {
   const o = check(await supabaseAdmin.from("adm_payment_orders").select("id, application_id, purpose, status").eq("gateway_order_id", i.razorpay_order_id).eq("institution_id", inst).eq("family_id", profile).maybeSingle()) as { id: string; application_id: string; purpose: "application_fee" | "admission_fee"; status: string } | null;
   if (!o) throw new HttpError(404, "Payment not found.");
   if (!verifyCheckoutSignature(i.razorpay_order_id, i.razorpay_payment_id, i.razorpay_signature)) throw new HttpError(400, "The payment could not be verified. If money was taken it will be matched by the school.");
-  if (o.status === "Paid") return { ok: true };
-  const claimed = check(await supabaseAdmin.from("adm_payment_orders").update({ status: "Paid", gateway_payment_id: i.razorpay_payment_id, paid_at: new Date().toISOString() }).eq("id", o.id).eq("institution_id", inst).eq("family_id", profile).eq("status", "Created").select("id")) as { id: string }[];
-  if (!claimed.length) return { ok: true };
-  const mode = i.mode ?? "UPI";
+  await settle(inst, profile, o, i.razorpay_payment_id, i.mode ?? "UPI");
+  return { ok: true };
+}
+
+type Order = { id: string; application_id: string; purpose: "application_fee" | "admission_fee"; status: string };
+/** Records a paid order once: whoever claims it first (the browser or the gateway's notice) writes the fee. */
+async function settle(inst: string, profile: string, o: Order, paymentId: string, mode: (typeof PAY_MODES)[number]) {
+  if (o.status === "Paid") return;
+  const claimed = check(await supabaseAdmin.from("adm_payment_orders").update({ status: "Paid", gateway_payment_id: paymentId, paid_at: new Date().toISOString() }).eq("id", o.id).eq("institution_id", inst).eq("family_id", profile).eq("status", "Created").select("id")) as { id: string }[];
+  if (!claimed.length) return;
   const a = await mine(inst, profile, o.application_id);
   if (o.purpose === "application_fee") {
     check(await supabaseAdmin.from("adm_applications").update({ fee_status: "Paid", fee_amount: await formFee(inst, a.class_sought), fee_mode: mode, fee_paid_on: today() }).eq("id", a.id).eq("institution_id", inst).eq("family_id", profile).eq("fee_status", "Pending").select("id"));
@@ -504,7 +510,14 @@ export async function payVerify(inst: string, profile: string, body: unknown) {
     await collectAdmissionFee(inst, { application_id: a.id, mode }, profile);
     check(await supabaseAdmin.from("adm_offers").update({ status: "Fee paid" }).eq("institution_id", inst).eq("application_id", a.id).select("id"));
   }
-  return { ok: true };
+}
+
+/** The gateway's own notice that money arrived (its signature already checked by the webhook). */
+export async function settleApplicantOrder(orderId: string, paymentId: string): Promise<boolean> {
+  const o = check(await supabaseAdmin.from("adm_payment_orders").select("id, institution_id, family_id, application_id, purpose, status").eq("gateway_order_id", orderId).maybeSingle()) as (Order & { institution_id: string; family_id: string }) | null;
+  if (!o) return false;
+  await settle(o.institution_id, o.family_id, o, paymentId, "UPI");
+  return true;
 }
 
 // ═════════════ messages ═════════════
