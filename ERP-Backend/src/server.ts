@@ -24,6 +24,7 @@ import { admissionsRouter } from "./modules/admissions/admissions.routes";
 import { principalRouter } from "./modules/principal/principal.routes";
 import { hrRouter } from "./modules/hr/hr.routes";
 import { transportRouter } from "./modules/transport/transport.routes";
+import { parentRouter } from "./modules/parent/parent.routes";
 import { applicantRouter, applicantPublicRouter } from "./modules/applicant/applicant.routes";
 import { publicRouter } from "./modules/public/public.routes";
 import { webhookRouter } from "./modules/billing/billing.routes";
@@ -115,6 +116,7 @@ app.use("/api/v1/admissions", admissionsRouter);
 app.use("/api/v1/principal", principalRouter);
 app.use("/api/v1/hr", hrRouter);
 app.use("/api/v1/transport", transportRouter);
+app.use("/api/v1/parent", parentRouter);
 app.use("/api/v1/applicant", applicantRouter);
 app.use("/api/v1/public/applicant", applicantPublicRouter);
 app.use("/api/v1/public", publicRouter);
@@ -142,7 +144,9 @@ app.use((req: Request, res: Response) => {
 app.use((err: Error, _req: Request, res: Response, _next: express.NextFunction) => {
   if (err instanceof HttpError) {
     if (err.status >= 500) res.locals.errorMessage = err.message;
-    res.status(err.status).json({ error: err.message });
+    const hide = err.status === 500 && process.env.NODE_ENV === "production";
+    if (hide) console.error("Request failed:", err.message);
+    res.status(err.status).json({ error: hide ? "Internal Server Error" : err.message });
     return;
   }
   res.locals.errorMessage = err.message;

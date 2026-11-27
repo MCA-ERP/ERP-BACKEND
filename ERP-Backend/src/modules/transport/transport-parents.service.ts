@@ -1,3 +1,4 @@
+import { whatsappRefusals } from "../parent/parent-profile.service";
 import { randomUUID } from "crypto";
 import { z } from "zod";
 import { supabaseAdmin } from "../../../db/client";
@@ -89,8 +90,12 @@ export async function sendUpdate(inst: string, me: string, mods: string[], input
   }
   let queued = 0;
   if (texts.length) {
-    const phones = [...new Set([...parents.values()].map((p) => p.phone).filter(Boolean))];
-    queued = await sendSchoolText({ key: TEMPLATE, institutionId: inst, channels: texts, phones, variables: { message: i.message }, relatedId: id, createdBy: me });
+    // parents who withdrew WhatsApp consent in the Parent portal are left out of WhatsApp (SMS is not affected)
+    const refused = texts.includes("whatsapp") ? await whatsappRefusals(inst) : new Set<string>();
+    for (const channel of texts) {
+      const phones = [...new Set([...parents.values()].filter((p) => channel !== "whatsapp" || !refused.has(p.guardian_id)).map((p) => p.phone).filter(Boolean))];
+      if (phones.length) queued += await sendSchoolText({ key: TEMPLATE, institutionId: inst, channels: [channel], phones, variables: { message: i.message }, relatedId: id, createdBy: me });
+    }
   }
   return { families: parents.size, without_parent: kids.length - parents.size, queued };
 }

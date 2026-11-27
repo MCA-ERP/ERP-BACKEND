@@ -40,3 +40,45 @@ Checked against the 27-point Pre-Launch Security Toolkit. Status: OK / Fixed now
 
 ## Still to do
 2-step codes for admins; Supabase reset-link expiry; alerting on denied-request spikes; gitleaks; live check of `/.env` and `/.git`; review of payments.
+
+# Full audit of every portal (27 November 2026)
+
+## What was checked, and how
+| Area | Method | Result |
+|---|---|---|
+| Database access with the public key | Read-only queries on the live database catalog (the direct host did not resolve; the pooler was used) | Every table has row-level security; no policy lets the public or a signed-in user read or write directly; no owner-rights function is open to them; the one storage bucket found is private |
+| Every API route (1,616 route/method entries) | Called as Parent, Student, Applicant, Driver, Librarian, Faculty and a role with no rights, with the database stubbed | Platform and portal routes refuse the wrong roles; two gaps fixed below |
+| School isolation, role granting | Code review and the existing tenant tests | No new gap found |
+| Injection, raw HTML, uploads | Code search and review | Search terms are cleaned; uploads check size and first bytes; two link fields fixed |
+| Dependencies | `npm audit --omit=dev` | 0 in both projects |
+| Secrets | Tracked files and git history | Current keys are in no commit. **An older project's keys are in history (see below)** |
+| Portal gaps | 2,114 frontend API calls matched to routes; every menu page of the 10 portals rendered to a screen | One missing route, only in unused code; no page without a screen |
+
+## Fixed in this audit
+1. Student and Applicant accounts could reach staff routes that asked for no role (staff leave, own-profile, staff search, notices). All family roles are now refused on `/school` and `/academics`.
+2. The school assistant gave any staff role with student view (librarian, canteen, mess and others) fee dues with parents' mobiles, staff contacts and the audit trail. Each tool is now limited by role.
+3. A temporary password gave full access until changed (only the screens redirected). The server now allows only the sign-in routes until it is replaced.
+4. The first-administrator shortcut (`SUPER_ADMIN_EMAILS`) now needs a confirmed email address.
+5. Database error text was returned to the browser on server errors; hidden in production.
+6. School Admin and teacher link fields accepted any text as a link; new links must be web links.
+7. An applicant's payment was lost from the records if the browser closed before reporting it; the signed gateway webhook now records it.
+8. Parents marked "Active" without a sign-in could not be given one; they now show "Create login".
+9. Icons in all portals were drawn too large (`size-*` classes did not exist in this Tailwind version).
+
+## Needs you (cannot be fixed from code)
+| Priority | Action |
+|---|---|
+| Urgent | `config/default.json` in old commits (`c81f9bd`, `d106203`; both repositories) holds an anon key, service role key and JWT secret of Supabase project `duqxfbpjwizlakcqzvgh`. If that project still exists, rotate its keys or delete it. |
+| High | Rotate the keys from the `.env.prod` shared earlier (open since the first report). |
+| High | Supabase dashboard > Authentication: turn off public sign-ups. Accounts are made by the server; open sign-up is currently on. |
+| High | Turn on two-step sign-in for Super Admin and School Admins (no account has it on). Needs email or SMS delivery set up. |
+| High | Apply `123_parent_portal.sql` (`npm run migrate`). |
+| Medium | Set the Supabase password-reset link expiry; scan history with gitleaks; check `/.env` and `/.git` on the live site; alerting on spikes of refused requests. |
+
+## Known and left as is (decide)
+- `sis.student.view` is held by 19 roles and opens broad reading in School Admin (parents, staff dashboard, staff attendance, exam question bank). Narrowing it changes what those roles see.
+- `/auth/password-changed` trusts the browser's word that the password was changed, so a user could keep a temporary password on purpose. Closing it means the change-password page asks for the current password.
+- The site's script policy allows inline scripts (Next.js default).
+- One Razorpay account receives platform, admission and school fees.
+- The code has 99 lint errors from React's newer hook rules (not security); the build passes.
+- Not tested: a live penetration test, the deployed servers, backups, and real sign-ins for each role.

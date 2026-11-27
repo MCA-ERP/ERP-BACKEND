@@ -1,3 +1,4 @@
+import { createParentAccount } from "../admin/users-mgmt.service";
 import { z } from "zod";
 import { supabaseAdmin } from "../../../db/client";
 import { check } from "../../lib/db";
@@ -10,9 +11,9 @@ const txt = (n: number) => z.string().trim().max(n);
 const blank = <T>(v: T | "" | undefined) => (v === "" || v === undefined ? null : v);
 const MAIN = ["Father", "Mother"];
 
-interface G { id: string; full_name: string; phone: string; email: string | null; occupation: string | null; qualification: string | null; parent_code: string | null; login_status: "None" | "Active" | "Inactive"; whatsapp: string | null; language: string | null; emergency_name: string | null; emergency_phone: string | null; address: string | null; city: string | null; pincode: string | null; income_band: string | null }
+interface G { user_profile_id?: string | null; id: string; full_name: string; phone: string; email: string | null; occupation: string | null; qualification: string | null; parent_code: string | null; login_status: "None" | "Active" | "Inactive"; whatsapp: string | null; language: string | null; emergency_name: string | null; emergency_phone: string | null; address: string | null; city: string | null; pincode: string | null; income_band: string | null }
 interface Link { student_id: string; guardian_id: string; relation: string; can_pick_up: boolean }
-const GCOLS = "id, full_name, phone, email, occupation, qualification, parent_code, login_status, whatsapp, language, emergency_name, emergency_phone, address, city, pincode, income_band";
+const GCOLS = "id, full_name, phone, email, occupation, qualification, parent_code, login_status, whatsapp, language, emergency_name, emergency_phone, address, city, pincode, income_band, user_profile_id";
 
 async function load(inst: string) {
   const [g, l, ro] = await Promise.all([
@@ -32,7 +33,7 @@ const shape = (g: G, links: Link[], kids: Map<string, { id: string; name: string
   const rel = mine[0]?.relation ?? "Guardian";
   const other = mine.length ? links.filter((x) => x.student_id === mine[0].student_id && x.guardian_id !== g.id && MAIN.includes(x.relation) && MAIN.includes(rel))[0] : undefined;
   const spouse = other ? all.find((x) => x.id === other.guardian_id) : undefined;
-  return { id: g.id, name: g.full_name, relation: rel, mobile: g.phone === "-" ? "" : g.phone, email: g.email ?? "", parent_code: g.parent_code ?? "", login: g.login_status === "None" ? "Not installed" : g.login_status, app: g.login_status === "None" ? "Not installed" : "Installed", students, spouse: spouse ? { id: spouse.id, name: spouse.full_name, occupation: spouse.occupation ?? "" } : null, can_pick_up: mine.some((x) => x.can_pick_up) };
+  return { id: g.id, name: g.full_name, relation: rel, mobile: g.phone === "-" ? "" : g.phone, email: g.email ?? "", parent_code: g.parent_code ?? "", login: g.login_status === "None" || !g.user_profile_id ? "Not installed" : g.login_status, app: g.login_status === "None" || !g.user_profile_id ? "Not installed" : "Installed", students, spouse: spouse ? { id: spouse.id, name: spouse.full_name, occupation: spouse.occupation ?? "" } : null, can_pick_up: mine.some((x) => x.can_pick_up) };
 };
 
 export async function listParents(inst: string) {
@@ -119,10 +120,19 @@ export async function linkStudent(inst: string, id: string, body: unknown) {
   return getParent(inst, id);
 }
 
-export async function setLogin(inst: string, id: string, body: unknown) {
+const LOGIN_MAKERS = ["SuperAdmin", "InstitutionAdmin", "Principal", "VicePrincipal", "Registrar", "AdmissionsHead"];
+export async function setLogin(inst: string, id: string, body: unknown, actor?: { profileId?: string; name: string }, actorRole?: string) {
   const g = await guardian(inst, id);
   const { action } = z.object({ action: z.enum(["create", "activate", "deactivate", "reset"]) }).strict().parse(body);
-  if (action === "create") { if (g.login_status !== "None") throw new HttpError(409, "This parent already has a login."); check(await supabaseAdmin.from("guardians").update({ login_status: "Active" }).eq("id", id).eq("institution_id", inst).select("id")); }
+  if (action === "create") {
+    // the temporary password opens that family's records, so only the school office's senior roles may make it
+    if (!LOGIN_MAKERS.includes(actorRole ?? "")) throw new HttpError(403, "Only the School Admin, Principal, Vice Principal, Registrar or Admissions Head can create a parent login.");
+    // makes the sign-in the Parent portal uses (their mobile number and a temporary password, shown once)
+    const row = check(await supabaseAdmin.from("guardians").select("user_profile_id").eq("id", id).eq("institution_id", inst).maybeSingle()) as { user_profile_id: string | null } | null;
+    if (row?.user_profile_id) throw new HttpError(409, "This parent already has a login.");
+    const made = await createParentAccount(id, actor ?? { name: "School office" }, actorRole);
+    return { ...(await getParent(inst, id)), credential: { login_id: made.login_id, temporary_password: made.temporary_password } };
+  }
   else if (action === "activate") check(await supabaseAdmin.from("guardians").update({ login_status: "Active" }).eq("id", id).eq("institution_id", inst).select("id"));
   else if (action === "deactivate") check(await supabaseAdmin.from("guardians").update({ login_status: "Inactive" }).eq("id", id).eq("institution_id", inst).select("id"));
   else { if (g.login_status === "None") throw new HttpError(409, "Create a login first."); check(await supabaseAdmin.from("guardians").update({ otp_requested_at: new Date().toISOString() }).eq("id", id).eq("institution_id", inst).select("id")); }

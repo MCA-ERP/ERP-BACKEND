@@ -50,8 +50,17 @@ function exportOf(label: string, name: string, head: string[], rows: (string | n
   return { kind: "export", label: label.slice(0, 60), name, head, rows, auto: true };
 }
 
-async function runTool(inst: string, name: string, input: Record<string, unknown>, actions: AssistAction[], modules: string[] | null): Promise<string> {
+const LEADERS = ["SuperAdmin", "InstitutionAdmin", "Chairman", "Principal", "VicePrincipal"];
+/** Tools with money, staff contact details or the audit trail: only these roles. Tools not listed are for any staff who may open the assistant. */
+const TOOL_ROLES: Record<string, string[]> = {
+  fee_summary: [...LEADERS, "Accountant", "Registrar"], fees_overdue: [...LEADERS, "Accountant", "Registrar"],
+  staff: [...LEADERS, "HR"], recent_activity: LEADERS, admissions_summary: [...LEADERS, "AdmissionsHead", "Registrar", "Receptionist"],
+};
+export const mayUseTool = (role: string, tool: string) => !TOOL_ROLES[tool] || TOOL_ROLES[tool].includes(role);
+
+async function runTool(inst: string, name: string, input: Record<string, unknown>, actions: AssistAction[], modules: string[] | null, role: string): Promise<string> {
   try {
+    if (!mayUseTool(role, name)) return "This person's role does not have access to that information. Tell them so, and that the School Admin can help.";
     if (TOOL_NEEDS[name] && !allowed(modules, TOOL_NEEDS[name])) return "This school's plan does not include that module, so there is nothing to look up. Tell the person it is not part of their plan and suggest asking the administrator about upgrading.";
     const str = (k: string) => (typeof input[k] === "string" ? (input[k] as string) : undefined);
     const wantsFile = input.export === true;
@@ -118,7 +127,7 @@ async function runTool(inst: string, name: string, input: Record<string, unknown
   }
 }
 
-export async function schoolChat(messages: ChatMessage[], page: string | undefined, who: string, inst: string, roleLabel: string, modules: string[] | null = null): Promise<{ reply: string; actions: AssistAction[] }> {
+export async function schoolChat(messages: ChatMessage[], page: string | undefined, who: string, inst: string, roleLabel: string, modules: string[] | null = null, role = ""): Promise<{ reply: string; actions: AssistAction[] }> {
   if (!ID.test(inst)) throw new HttpError(400, "No school is selected.");
   const which = provider();
   if (!which) throw new HttpError(503, NOT_SET);
@@ -137,7 +146,7 @@ export async function schoolChat(messages: ChatMessage[], page: string | undefin
   ].filter(Boolean).join("\n\n");
 
   try {
-    const out = await runAgent({ provider: which, model: MODEL(), system, messages: messages.slice(-12), user: { permissions: [] }, tools: TOOLS as never, run: (n, i, a) => runTool(inst, n, i, a, modules) });
+    const out = await runAgent({ provider: which, model: MODEL(), system, messages: messages.slice(-12), user: { permissions: [] }, tools: TOOLS.filter((t) => mayUseTool(role, t.name)) as never, run: (n, i, a) => runTool(inst, n, i, a, modules, role) });
     return { reply: tidy(out.text) || "I could not come up with an answer. Try asking in another way.", actions: out.actions };
   } catch (err) {
     const status = (err as { status?: number }).status;

@@ -81,7 +81,7 @@ export async function listSchools(query: Record<string, unknown>) {
 
   const apply = (q: any) => {
     const search = safeSearch(query.search);
-    if (search) q = q.or(`name.ilike.%${search}%,code.ilike.%${search}%,city.ilike.%${search}%`);
+    if (search) q = q.or(`name.ilike.%${search}%,code.ilike.%${search}%,city.ilike.%${search}%,branch.ilike.%${search}%`);
     if (query.plan) q = q.eq("plan_code", String(query.plan));
     if (query.board) q = q.eq("board", String(query.board));
     if (query.state) q = q.eq("state", String(query.state));
@@ -161,6 +161,7 @@ export interface SchoolInput {
   name: string;
   type?: string;
   board?: string | null;
+  branch?: string | null;
   city?: string | null;
   state?: string | null;
   contact_name?: string | null;
@@ -175,9 +176,18 @@ export interface SchoolInput {
   admin?: { first_name: string; last_name: string; email: string; password: string };
 }
 
+/** The first of NAR, NAR2, NAR3 … that no school uses yet. */
+async function freeCode(base: string): Promise<string> {
+  const rows = check(await supabaseAdmin.from("institutions").select("code").like("code", `${base}%`).limit(1000)) as { code: string }[];
+  const used = new Set(rows.map((r) => r.code.toUpperCase()));
+  let code = base; for (let n = 2; used.has(code); n += 1) code = `${base}${n}`;
+  return code;
+}
+
 export async function createSchool(input: SchoolInput, actorProfileId?: string) {
-  const code = (input.code || input.name.replace(/[^a-zA-Z]/g, "").substring(0, 3)).toUpperCase();
+  let code = (input.code || input.name.replace(/[^a-zA-Z]/g, "").substring(0, 3)).toUpperCase();
   if (code.length < 2) throw new HttpError(400, "School code must be at least 2 characters.");
+  if (!input.code) code = await freeCode(code); // branches of one school start with the same letters
 
   const trialDays = await getSetting<number>("general.trial_days", 14);
   const status = input.status ?? "Trial";

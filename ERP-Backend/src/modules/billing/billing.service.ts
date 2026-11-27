@@ -1,3 +1,5 @@
+import { settleFeeOrder } from "../parent/parent-fees.service";
+import { settleApplicantOrder } from "../applicant/applicant.service";
 import { supabaseAdmin } from "../../../db/client";
 import { check } from "../../lib/db";
 import { HttpError } from "../../lib/http-error";
@@ -330,6 +332,10 @@ export async function handleRazorpayWebhook(rawBody: Buffer, signature: string, 
   if (!entity?.order_id) return { ignored: true };
 
   if (event.event === "payment.captured") {
+    // a parent's school-fee checkout settles the fee record; every other order is a platform invoice
+    if (await settleFeeOrder(entity.order_id, entity.id)) return { settled: true };
+    // an applicant's application or admission fee
+    if (await settleApplicantOrder(entity.order_id, entity.id)) return { settled: true };
     await settleOrder(entity.order_id, entity.id, entity.method);
     return { settled: true };
   }

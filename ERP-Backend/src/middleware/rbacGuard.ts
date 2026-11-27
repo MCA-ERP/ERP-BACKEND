@@ -60,3 +60,12 @@ export function requireModule(code: string) {
     });
   };
 }
+
+/** Accounts that belong to families, not to the school's staff. */
+export const FAMILY_ROLES = ["Parent", "Student", "Applicant"];
+
+/** Staff routes that families must never reach, even where a route asks for no particular role. */
+export function staffOnly(req: Request, res: Response, next: NextFunction): void {
+  if (!FAMILY_ROLES.includes(req.user?.role ?? "")) return next();
+  res.status(403).json({ error: "Forbidden. This area is for school staff." });
+}

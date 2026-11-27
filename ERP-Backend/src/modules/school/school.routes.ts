@@ -2,7 +2,7 @@ import { moduleGate } from "../../lib/portal-modules";
 import express, { Router, Request, Response, NextFunction } from "express";
 import { z } from "zod";
 import { authGuard } from "../../middleware/authGuard";
-import { requirePermission, requireRoles } from "../../middleware/rbacGuard";
+import { requirePermission, requireRoles, staffOnly } from "../../middleware/rbacGuard";
 import { assertHrMayChange } from "./protected-staff";
 import { check } from "../../lib/db";
 import { requireInstitutionId } from "../../lib/tenant";
@@ -80,6 +80,8 @@ export const schoolRouter = Router();
 
 // Everything here is the school's own setup data; SuperAdmin must say which school via ?institution_id=
 schoolRouter.use(authGuard);
+// families (parents, students, applicants) never reach staff routes: parents and applicants have their own portals
+schoolRouter.use(staffOnly);
 schoolRouter.use(moduleGate);
 
 const manage = requirePermission("academics.setup.manage");
@@ -966,7 +968,7 @@ schoolRouter.put("/boards", adminOnly, h((req, _res, inst) => ac.saveBoard(inst,
 schoolRouter.get(par + "/:id", view, h((req, _res, inst) => pr.getParent(inst, uuid(req))));
 schoolRouter.put(par + "/:id", staffDesk, h((req, _res, inst) => pr.saveParent(inst, uuid(req), req.body)));
 schoolRouter.post(par + "/:id/link", staffDesk, h((req, _res, inst) => pr.linkStudent(inst, uuid(req), req.body)));
-schoolRouter.put(par + "/:id/login", staffDesk, h((req, _res, inst) => pr.setLogin(inst, uuid(req), req.body)));
+schoolRouter.put(par + "/:id/login", staffDesk, h(async (req, _res, inst) => pr.setLogin(inst, uuid(req), req.body, await actorName(req), req.user?.role)));
 schoolRouter.get("/alumni", view, h((_req, _res, inst) => pr.listAlumni(inst)));
 schoolRouter.post("/alumni", staffDesk, h(async (req, res, inst) => { res.status(201); return { item: await pr.addAlumnus(inst, req.body) }; }));
 schoolRouter.post("/alumni/events", staffDesk, h(async (req, res, inst) => { res.status(201); return { item: await pr.addAlumniEvent(inst, req.body) }; }));
@@ -975,7 +977,7 @@ schoolRouter.post("/alumni/events", staffDesk, h(async (req, res, inst) => { res
 schoolRouter.post("/assist/chat", view, h(async (req, _res, inst) => {
   const { messages, page } = z.object({ messages: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().trim().min(1).max(4000) })).min(1).max(20), page: z.string().trim().max(200).optional() }).parse(req.body);
   if (messages[messages.length - 1].role !== "user") throw new HttpError(400, "Ask a question first.");
-  return schoolChat(messages, page, req.user?.profileId ?? "anonymous", inst, req.user?.roleDisplayName ?? "", req.user?.role === "SuperAdmin" ? null : (req.user?.modules ?? []));
+  return schoolChat(messages, page, req.user?.profileId ?? "anonymous", inst, req.user?.roleDisplayName ?? "", req.user?.role === "SuperAdmin" ? null : (req.user?.modules ?? []), req.user?.role ?? "");
 }));
 schoolRouter.post("/assist/transcribe", view, express.raw({ type: "audio/*", limit: "2mb" }), h(async (req, _res) => {
   const mime = String(req.headers["content-type"] ?? "audio/webm").split(";")[0];

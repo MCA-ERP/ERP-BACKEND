@@ -329,7 +329,7 @@ export async function createParentAccount(guardianId: string, actor: Actor, acto
     { email: `${digits}@${domain}`, password, first_name: first || "Parent", last_name: rest.join(" ") || "-", phone: digits, role: "Parent", institution_id: g.institution_id, must_change_password: true },
     actorRole
   )) as unknown as { id: string };
-  check(await supabaseAdmin.from("guardians").update({ user_profile_id: user.id }).eq("id", g.id).select("id"));
+  check(await supabaseAdmin.from("guardians").update({ user_profile_id: user.id, login_status: "Active" }).eq("id", g.id).select("id"));
   await logEvent(g.institution_id, "parent_account", `Created a parent sign-in account (${g.full_name})`, actor);
   return { guardian_id: g.id, name: g.full_name, login_id: digits, temporary_password: password };
 }
