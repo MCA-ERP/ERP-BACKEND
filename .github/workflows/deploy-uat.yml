@@ -1,0 +1,37 @@
+name: Deploy Backend UAT (Render)
+
+on:
+  push:
+    branches: [uat, uat-backend]
+
+permissions:
+  contents: read
+
+jobs:
+  build-migrate-and-deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ERP-Backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ERP-Backend/package-lock.json
+      - run: npm ci
+      - name: Type check
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: Run migrations on UAT database
+        if: ${{ secrets.UAT_DATABASE_URL != '' }}
+        env:
+          DATABASE_URL: ${{ secrets.UAT_DATABASE_URL }}
+        run: node db/migrate.js
+      - name: Trigger Render UAT Deploy
+        if: ${{ secrets.RENDER_DEPLOY_HOOK_UAT != '' }}
+        run: curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK_UAT }}"
