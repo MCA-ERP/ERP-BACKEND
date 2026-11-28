@@ -55,6 +55,7 @@ export async function transportChat(messages: ChatMessage[], page: string | unde
   limit(me);
   const { data } = await supabaseAdmin.from("institutions").select("name").eq("id", inst).maybeSingle();
   const school = (data as { name: string } | null)?.name ?? "the school";
+  console.log("SCHOOL => ", school);
   const system = [
     `You are MCA Assist, the assistant inside the Transport portal of ${school}, on the My Class Assist school ERP. You are talking to ${roleLabel || "the transport manager"}. You know this portal and the school's vehicles, crew, routes, trips and riders.`,
     "You have read-only tools for this school's transport records. For ANY question about vehicles, documents, drivers, routes, stops, students on the bus, trips or notifications, call the tools and answer from what they return. Never guess or invent a number, name or date.",

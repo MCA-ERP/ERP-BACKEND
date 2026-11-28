@@ -28,10 +28,20 @@ jobs:
       - name: Build
         run: npm run build
       - name: Run migrations on UAT database
-        if: ${{ secrets.UAT_DATABASE_URL != '' }}
         env:
-          DATABASE_URL: ${{ secrets.UAT_DATABASE_URL }}
-        run: node db/migrate.js
+          UAT_DATABASE_URL: ${{ secrets.UAT_DATABASE_URL }}
+        run: |
+          if [ -n "$UAT_DATABASE_URL" ]; then
+            DATABASE_URL="$UAT_DATABASE_URL" node db/migrate.js
+          else
+            echo "UAT_DATABASE_URL secret not set, skipping migrations."
+          fi
       - name: Trigger Render UAT Deploy
-        if: ${{ secrets.RENDER_DEPLOY_HOOK_UAT != '' }}
-        run: curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK_UAT }}"
+        env:
+          RENDER_DEPLOY_HOOK_UAT: ${{ secrets.RENDER_DEPLOY_HOOK_UAT }}
+        run: |
+          if [ -n "$RENDER_DEPLOY_HOOK_UAT" ]; then
+            curl -fsS -X POST "$RENDER_DEPLOY_HOOK_UAT"
+          else
+            echo "RENDER_DEPLOY_HOOK_UAT secret not set, skipping deploy hook."
+          fi
